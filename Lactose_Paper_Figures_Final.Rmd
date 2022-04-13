@@ -1,0 +1,1619 @@
+---
+title: "Lactose_Paper_Figures_Only"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+
+```
+
+## R Markdown
+```{r libraries, warning=FALSE, message=FALSE}
+### Setup workspace
+setwd("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures")
+
+library("phyloseq")
+packageVersion("phyloseq")
+library("ggplot2")
+packageVersion("ggplot2")
+library("plyr")
+packageVersion("plyr")
+library("reshape2")
+packageVersion("reshape2")
+library("scales")
+packageVersion("scales")
+library("grid")
+packageVersion("grid")
+theme_set(theme_bw())
+library("magrittr")
+packageVersion("magrittr")
+library("data.table")
+packageVersion("data.table")
+library("tibble")
+packageVersion("tibble")
+library("viridis")
+library(dplyr)
+packageVersion("viridis")
+library("treeDA")
+packageVersion("treeDA")
+library("Rmisc")
+packageVersion("Rmisc")
+library(tidyr)
+library("Matrix")
+packageVersion("Matrix")
+library("rlist")
+packageVersion("rlist")
+library("readxl")
+packageVersion("readxl")
+library("dplyr")
+packageVersion("dplyr")
+library("vegan")
+packageVersion("vegan")
+library("ggridges")
+packageVersion("ggridges")
+library("lubridate")
+packageVersion("lubridate")
+library("ggpubr")
+packageVersion("ggpubr")
+library("cowplot")
+packageVersion("cowplot")
+library("RColorBrewer")
+packageVersion("RColorBrewer")
+library(tidyr)
+
+gsub("[[:punct:][:space:]]", "-", Sys.time())
+```
+
+
+```{r phyloseq object}
+### Setup phyloseq object
+
+# Import phyloseq object, remove controls + contaminated samples
+ps_all = readRDS("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/LCT_phyloseq2.rds")
+ps = subset_samples(ps_all, Contamination == "N") #remove contaminated samples
+ps = subset_samples(ps, StudyPhase != "NA") #remove controls
+ps = subset_samples(ps, ParticipantID != "A1111") #remove controls
+
+# add ASV column to taxonomy table of phyloseq object
+taxtab <- tax_table(ps)
+df_tax <- as(taxtab, "matrix")
+df_tax <- cbind(df_tax, "ASV"=1:nrow(df_tax))
+ps_asv = phyloseq(otu_table(ps),tax_table(df_tax),phy_tree(ps),sample_data(ps))
+
+# transform samples, x is taxa count in sample then divide that by total count
+ps = transform_sample_counts(ps_asv, function(x) x / sum(x) )
+
+# filter, only OTUs with a percent of sum greater than x are kept
+#ps = filter_taxa(ps, function(x) sum(x) > .001, TRUE)
+ps = filter_taxa(ps, function(x) sum(x) > .005, TRUE)
+
+# Fix metadata error B2234 all samples should be labeled as Intolerant
+sample_data(ps)$X3rdHBTtolerance <- ifelse(sample_data(ps)$ParticipantID=="B2234","I",as.character(sample_data(ps)$X3rdHBTtolerance))
+#data.frame(sample_data(ps))%>%group_by(X3rdHBTtolerance,ParticipantID)%>%count() # check to make sure tolerances are correct
+
+# Fix error in metadata that dayofstudy for samples should be defined for B3345 as the first sample day (not day did first HBT which is how it currently is)
+sample_data(ps)$DayofYearStart <- ifelse(sample_data(ps)$ParticipantID=="B3345",min((sample_data(subset_samples(ps,ParticipantID=="B3345"))$DayofYear)),sample_data(ps)$DayofYearStart)
+sample_data(ps)$DayofStudySample <- ifelse(sample_data(ps)$ParticipantID=="B3345",sample_data(ps)$DayofYear-sample_data(ps)$DayofYearStart,sample_data(ps)$DayofStudySample)
+
+```
+
+```{r Figure 1}
+### FIGURE 1
+
+# Remove participants that did not sample regularly through study or skipped elimination
+ps_reg = subset_samples(ps, ParticipantID != 'B1123' & ParticipantID != 'A2222' & ParticipantID != 'A6666' & ParticipantID != 'A9999')
+
+# Fix metadata error, A5555 should have DayofYearStart = 219 and DayofStudyReintroduction 43 for all samples
+sample_data(ps_reg)[sample_data(ps_reg)$ParticipantID=="A5555","DayofStudyReintroduction"] <- 43
+sample_data(ps_reg)[sample_data(ps_reg)$ParticipantID=="A5555","DayofYearStart"] <- 219
+
+# Read in HBT data and preprocess
+hbt_data_full <- read_excel("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/HBTdata.xlsx") %>% dplyr::rename(ParticipantID = ID_Subject)
+hbt_data_filt <- filter(hbt_data_full, ParticipantID != 'B1123' & ParticipantID != 'A2222' & ParticipantID != 'A6666' & ParticipantID != 'A9999')
+hbt_data_filt$DayHBTtest <- lubridate::yday(as.Date(hbt_data_filt$Date_Test,format="%Y/%d/%m"))
+hbt_data <- hbt_data_filt %>% group_by(ParticipantID,HBT_num) %>% summarize(DayHBTtest=mean(DayHBTtest))
+
+# Calculate day of each HBT
+temp <- sample_data(ps_reg) %>% group_by(ParticipantID) %>% summarize(Dayfirstsample=mean(DayofYearStart))
+hbt_data <- left_join(hbt_data,temp,by=c("ParticipantID"))
+hbt_data$HBT_num <- as.factor(hbt_data$HBT_num)
+hbt_data$DayofStudyHBT <- as.numeric(as.numeric(hbt_data$DayHBTtest-hbt_data$Dayfirstsample))
+hbt_data$HBT <- "HBT"
+
+## Sampling time point for each participant colored by phase, participants who sampled regularly through study
+ggplot() + geom_point(data=sample_data(ps_reg),aes(x = DayofStudySample, y = ParticipantID, color = StudyPhase), size = 3,position = position_jitter(width = 0.001, height = 0.001)) + geom_point(data=hbt_data,aes(x= DayofStudyHBT,y = ParticipantID,fill=HBT), shape=4,size =3) +  xlab("Study Day") + ylab("Subject ID") + scale_color_manual(name="",values=c("Baseline"="#1B9E77","Elimination"="#D95F02","Reintroduction"="#7570B3"),labels=c("Baseline\nFecal Swab\n","Elimination Phase\nFecal Swab\n","Reintroduction Phase\nFecal Swab\n")) + scale_x_continuous(breaks = c(-14,0,14,28,42,56,70,84,98))+ scale_fill_manual(name="",values=c("HBT"="black"),labels=c("HBT"))+labs(color="",fill="")+theme(legend.margin = margin(-0.5,0,0,0, unit="cm"),legend.spacing.y = unit(0.1, "cm"))
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/sampling_overview_wHBT.png",width=9,height=6)
+```
+
+```{r Supplementary Figure 1}
+### SUPPLEMENTARY FIGURE 1
+
+# Plot all samples for each participant for each test over the course of the test
+hbt_data_filt$HBT_num <- as.factor(as.character(hbt_data_filt$HBT_num))
+hbt_data_filt$Minutes_Elapsed <- as.integer(as.character(hbt_data_filt$Minutes_Elapsed))
+hbt_data_filt$Combined_H2_CH4 <- as.integer(as.character(hbt_data_filt$Combined_H2_CH4))
+
+# Number of breath samples in each breath for each participant
+breath_num <- arrange(hbt_data_filt %>% group_by(ParticipantID,HBT_num) %>% count(),ParticipantID,HBT_num)$n
+hbt_data_filt <- hbt_data_filt %>% arrange(ParticipantID,HBT_num)
+hbt_data_filt <- hbt_data_filt %>% mutate(Combined_H2_CH4_adj= Combined_H2_CH4 - rep(filter(hbt_data_filt,ParticipantID==ParticipantID&Minutes_Elapsed==0&HBT_num==HBT_num)$Combined_H2_CH4,breath_num))
+hbt_data_filt$Combined_H2_CH4_adj_nonneg <- ifelse(hbt_data_filt$Combined_H2_CH4_adj<0,0,hbt_data_filt$Combined_H2_CH4_adj)
+hbt_data_filt <- filter(hbt_data_filt,!is.na(Combined_H2_CH4_adj_nonneg))
+
+ggplot(data=hbt_data_filt,aes(x=Minutes_Elapsed,y=Combined_H2_CH4_adj_nonneg,color=HBT_num)) + geom_point()+geom_line() + xlab("Minutes Elapsed")+ylab("Concentration of Hydrogen\nand Methane Gas (ppm)")+facet_wrap(~ParticipantID)+geom_hline(yintercept=20,linetype="dashed")+scale_color_brewer(palette = "BrBG",name = "HBT", labels = c("First Baseline","Second Baseline","After Elimination","After Reintroduction"))
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/hbt_fulltestdata.png",height=8,width=10)
+
+```
+
+
+```{r Figure 2 and Supplementary Figure 2a}
+### FIGURE 2 AND SUPPLEMENTARY FIGURE 2a
+
+############# Non-negative HBT AUC analysis
+## AUC with nonnegative values version
+# Read in HBT data and preprocess
+hbt_data_full <- read_excel("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/HBTdata.xlsx") %>% rename(ParticipantID = ID_Subject)
+hbt_data_filt <- filter(hbt_data_full, ParticipantID != 'B1123' & ParticipantID != 'A2222' & ParticipantID != 'A6666' & ParticipantID != 'A9999')
+hbt_data_filt$DayHBTtest <- lubridate::yday(as.Date(hbt_data_filt$Date_Test,format="%Y/%d/%m"))
+hbt_data_filt$Minutes_Elapsed <- as.numeric(hbt_data_filt$Minutes_Elapsed)
+hbt_data_filt$Combined_H2_CH4 <- as.numeric(hbt_data_filt$Combined_H2_CH4)
+hbt_data_filt <- filter(hbt_data_filt,!is.na(Combined_H2_CH4)) # drop rows with NA for Combined_H2_CH4
+
+ppl <- unique(hbt_data_filt$ParticipantID)
+tests <- unique(hbt_data_filt$HBT_num)
+all_tests <- list()
+all_ppl <- list()
+
+# From https://rdrr.io/cran/MESS/src/R/auc.R
+auc <-
+  function(x, y, from = min(x, na.rm=TRUE), to = max(x, na.rm=TRUE), type=c("linear", "spline"), absolutearea=FALSE, subdivisions =100, ...)
+  {
+    type <- match.arg(type)
+    
+    # Sanity checks
+    stopifnot(length(x) == length(y))
+    stopifnot(!is.na(from))
+    
+    if (length(unique(x)) < 2)
+      return(NA)
+    
+    if (type=="linear") {
+      
+      ## Default option
+      if (absolutearea==FALSE) {
+        values <- approx(x, y, xout = sort(unique(c(from, to, x[x > from & x < to]))), ...)
+        res <- 0.5 * sum(diff(values$x) * (values$y[-1] + values$y[-length(values$y)]))
+      } else { ## Absolute areas
+        ## This is done by adding artificial dummy points on the x axis
+        o <- order(x)
+        ox <- x[o]
+        oy <- y[o]
+        
+        idx <- which(diff(oy >= 0)!=0)
+        newx <- c(x, x[idx] - oy[idx]*(x[idx+1]-x[idx]) / (y[idx+1]-y[idx]))
+        newy <- c(y, rep(0, length(idx)))
+        values <- approx(newx, newy, xout = sort(unique(c(from, to, newx[newx > from & newx < to]))), ...)
+        res <- 0.5 * sum(diff(values$x) * (abs(values$y[-1]) + abs(values$y[-length(values$y)])))
+      }
+      
+    } else { ## If it is not a linear approximation
+      if (absolutearea)
+        myfunction <- function(z) { abs(splinefun(x, y, method="natural")(z)) }
+      else
+        myfunction <- splinefun(x, y, method="natural")
+      
+      
+      res <- integrate(myfunction, lower=from, upper=to, subdivisions=subdivisions)$value
+    }
+    
+    res
+  }
+# End of function from MESS
+
+for (person in ppl){
+  temp_ppl <- filter(hbt_data_filt,ParticipantID == person)
+for (test in tests){
+  #ifelse(person=='B5567'&test==1,next,'cool') # skip this test because wasn't done correctly by participant (all NAs)
+  temp_test <- filter(temp_ppl,HBT_num==test)
+  ifelse(filter(temp_test,Minutes_Elapsed==0)$Combined_H2_CH4>0,bv <- filter(temp_test,Minutes_Elapsed==0)$Combined_H2_CH4, bv <- 0) # if baseline is not zero, set it to that
+  temp_test$Combined_H2_CH4<-ifelse(temp_test$Combined_H2_CH4<= bv,0,temp_test$Combined_H2_CH4) # if any other samples are <= baseline, set them = 0
+  temp_test$AUC <- auc(temp_test$Minutes_Elapsed,temp_test$Combined_H2_CH4)
+  all_tests[[test]] <- temp_test}
+  all_ppl[[person]] <- bind_rows(all_tests)
+}
+newhbt <- bind_rows(all_ppl)
+
+hbt_long <- newhbt %>% group_by(ParticipantID,HBT_num) %>% summarize_at("AUC",mean)
+hbt_wide <- spread(hbt_long, HBT_num, AUC)
+hbt_long$HBT_num <- as.factor(hbt_long$HBT_num)
+
+meta_info <- data.frame(sample_data(ps_reg)) %>% group_by(ParticipantID) %>% filter(row_number()==1) # meta info, one row per person
+
+hbt_full <- left_join(hbt_long,meta_info,by='ParticipantID')
+
+#ggplot(hbt_long, aes(x = HBT_num, y = AUC,fill=HBT_num)) +
+  #geom_point() +  geom_line(aes(group=ParticipantID), alpha = .3) + geom_boxplot(alpha = .3) +xlab("HBT") + ylab("HBT Area Under the Curve") + labs(fill="HBT")
+#ggplot(hbt_full, aes(x = HBT_num, y = AUC,color=X2ndHBTtolerance)) +
+ # geom_point() +  geom_line(aes(group=ParticipantID), alpha = .3) + geom_boxplot(alpha = .3) +xlab("HBT") + ylab("HBT Area Under the Curve")
+
+my_comparisons <- list( c("2", "3"), c("2", "4"), c("3","4") ) #
+my_short_comp <- list( c("2", "1"))
+hbt_full$PreviousDairyBinary=ifelse(hbt_full$PreviousDairy=="Y"|hbt_full$PreviousDairy=="Some","Y","N")
+hbt_full <- as.data.frame(hbt_full) %>% mutate(combined_label=paste0(X3rdHBTtolerance,"-",PreviousDairyBinary))
+ggplot(hbt_full, aes(x = HBT_num, y = AUC)) +
+  geom_point(aes(color=combined_label,shape=combined_label),size=3)+
+  scale_shape_manual(name = "Tolerance and Diet",
+                     labels = c("Clinically defined intolerance,\nNo Previous Dairy in Diet\n","Clinically defined intolerance,\nPrevious Dairy in Diet\n","Clinically defined tolerance,\nNo Previous Dairy in Diet\n","Clinically defined tolerance,\nPrevious Dairy in Diet\n"),
+                     values=c(19,17,19,17)) +
+  geom_boxplot(alpha = .3) +xlab("HBT") + ylab("HBT Area Under the Curve") + stat_compare_means(comparisons=my_comparisons,method="wilcox.test",paired=TRUE, label.y = c(22800,24000,20000)) +
+  scale_color_manual(name = "Tolerance and Diet",
+                     labels = c("Clinically defined intolerance,\nNo Previous Dairy in Diet\n","Clinically defined intolerance,\nPrevious Dairy in Diet\n","Clinically defined tolerance,\nNo Previous Dairy in Diet\n","Clinically defined tolerance,\nPrevious Dairy in Diet\n"),
+                     values=c("#FDBF6F","#FDBF6F","#1F78B4","#1F78B4"))+
+  scale_x_discrete(name ="HBT",labels=c("First\nBaseline","Second\nBaseline","After\nElimination","After\nReintroduction"))+
+  stat_compare_means(data=hbt_full%>%filter(ParticipantID!="B5567"),HBT_num~AUC,comparisons=my_short_comp,method="wilcox.test",paired=TRUE) + # do stats without participant who didnt have valid HBT
+  #geom_text(x=1.25,y = 22600, label = "P =",color = "black")+geom_text(x=2.15,y = 24500, label = "P =",color = "black")+geom_text(x=2.70,y = 25750, label = "P =",color = "black")
+  geom_text(x=1.2,y = 22300, label = "P =",color = "black")+geom_text(x=2.10,y = 24350, label = "P =",color = "black")+geom_text(x=2.65,y = 25550, label = "P =",color = "black")+
+  geom_text(x=3.2,y = 21500, label = "P =",color = "black")+
+  geom_line(aes(color=combined_label,group=ParticipantID), alpha = .3)
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/HBT_boxplot_AUC_positive.png",height=7,width=7)
+
+
+ggplot(hbt_full, aes(x = HBT_num, y = AUC, color=combined_label,shape=combined_label)) +
+  facet_wrap(~ParticipantID)+
+  geom_point(size=3)+
+  scale_shape_manual(name = "Tolerance and Diet",
+                     labels = c("Clinically defined intolerance,\nNo Previous Dairy in Diet\n","Clinically defined intolerance,\nPrevious Dairy in Diet\n","Clinically defined tolerance,\nNo Previous Dairy in Diet\n","Clinically defined tolerance,\nPrevious Dairy in Diet\n"),
+                     values=c(19,17,19,17)) +
+  geom_line(aes(color=combined_label,group=ParticipantID), alpha = .3) +
+  ylab("HBT Area Under the Curve") +
+  scale_color_manual(name = "Tolerance and Diet",
+                     labels = c("Clinically defined intolerance,\nNo Previous Dairy in Diet\n","Clinically defined intolerance,\nPrevious Dairy in Diet\n","Clinically defined tolerance,\nNo Previous Dairy in Diet\n","Clinically defined tolerance,\nPrevious Dairy in Diet\n"),
+                     values=c("#FDBF6F","#FDBF6F","#1F78B4","#1F78B4"))+
+  scale_x_discrete(name ="HBT",
+                   labels=c("First\nBaseline","Second\nBaseline","After\nElimination","After\nReintroduction"))+
+  theme(legend.text=element_text(size=12),
+        legend.title=element_text(size=14),axis.title=element_text(size=14))
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/HBT_boxplot_AUC_individual_positive.png",height=7,width=15)
+
+wilcox.test((filter(hbt_full,HBT_num=="2")$AUC), (filter(hbt_full,HBT_num=="3")$AUC), paired=TRUE) # change from 2nd to 3rd HBT for all participants
+wilcox.test((filter(hbt_full,HBT_num=="2"&X3rdHBTtolerance=="T")$AUC), (filter(hbt_full,HBT_num=="3"&X3rdHBTtolerance=="T")$AUC), paired=TRUE) # change from 2nd to 3rd HBT for tolerant
+wilcox.test((filter(hbt_full,HBT_num=="2"&X3rdHBTtolerance=="I")$AUC), (filter(hbt_full,HBT_num=="3"&X3rdHBTtolerance=="I")$AUC), paired=TRUE) # change from 2nd to 3rd HBT for intolerant
+sum((filter(hbt_full,HBT_num=="2"&X3rdHBTtolerance=="I")$AUC)<(filter(hbt_full,HBT_num=="3"&X3rdHBTtolerance=="I")$AUC))/length(unique(filter(hbt_full,X3rdHBTtolerance=="I")$ParticipantID)) # what fraction of intolerant subjects had higher AUC after the elimination
+median((filter(hbt_full,HBT_num=="3"&X3rdHBTtolerance=="I")$AUC)-(filter(hbt_full,HBT_num=="2"&X3rdHBTtolerance=="I")$AUC)) # median increase of intolerant subjects had higher AUC after the elimination
+sum((filter(hbt_full,HBT_num=="2"&X3rdHBTtolerance=="T")$AUC)<(filter(hbt_full,HBT_num=="3"&X3rdHBTtolerance=="T")$AUC))/length(unique(filter(hbt_full,X3rdHBTtolerance=="T")$ParticipantID)) # what fraction of tolerant subjects had higher AUC after the elimination
+sum((filter(hbt_full,HBT_num=="2")$AUC)<(filter(hbt_full,HBT_num=="3")$AUC)) # what fraction of  subjects had higher AUC after the elimination
+
+wilcox.test((filter(hbt_full,HBT_num=="2")$AUC), (filter(hbt_full,HBT_num=="4")$AUC), paired=TRUE) # change from 2nd to 4th HBT for all participants
+wilcox.test((filter(hbt_full,HBT_num=="2"&X3rdHBTtolerance=="T")$AUC), (filter(hbt_full,HBT_num=="4"&X3rdHBTtolerance=="T")$AUC), paired=TRUE) # change from 2nd to 4th HBT for tolerant
+wilcox.test((filter(hbt_full,HBT_num=="2"&X3rdHBTtolerance=="I")$AUC), (filter(hbt_full,HBT_num=="4"&X3rdHBTtolerance=="I")$AUC), paired=TRUE) # change from 2nd to 4th HBT for intolerant
+sum((filter(hbt_full,HBT_num=="2"&X3rdHBTtolerance=="I")$AUC)<(filter(hbt_full,HBT_num=="4"&X3rdHBTtolerance=="I")$AUC))/length(unique(filter(hbt_full,X3rdHBTtolerance=="I")$ParticipantID)) # what fraction of intolerant subjects had higher AUC after reintroduction
+sum((filter(hbt_full,HBT_num=="2"&X3rdHBTtolerance=="T")$AUC)<(filter(hbt_full,HBT_num=="4"&X3rdHBTtolerance=="T")$AUC))/length(unique(filter(hbt_full,X3rdHBTtolerance=="T")$ParticipantID)) # what fraction of intolerant subjects had higher AUC after reintroduction
+sum((filter(hbt_full,HBT_num=="2")$AUC)<(filter(hbt_full,HBT_num=="4")$AUC)) # what fraction of subjects had higher AUC after reintroduction
+```
+
+```{r Figure 3a and b}
+### FIGURE 3a and 3b
+
+# Beta-diversity plots
+# Jaccard, all participants
+out.ord = ordinate(ps_reg, method = "PCoA", distance = "jaccard",binary="TRUE")
+bc.evals = out.ord$values$Eigenvalues
+plot_ordination(ps_reg, out.ord, color = "ParticipantID")+labs(color="Subject ID")+scale_color_brewer(palette = "Paired")
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/pcoa_jaccard_participandID.png")
+plot_ordination(ps_reg, out.ord, color = "StudyPhase")+labs(color="Study Phase")+scale_color_brewer(palette = "Dark2")
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/pcoa_jaccard_studyphase.png")
+
+```
+
+```{r Figure 4}
+### FIGURE 4
+
+ps_genus = tax_glom(ps_reg, taxrank="Genus") # combine all ASVs to group by genus
+otutab <- otu_table(ps_genus)
+taxtab <- tax_table(ps_genus)
+sampledata <- sample_data(ps_genus)
+taxtab = as(taxtab, "matrix") # forced taxtab into matrix
+tax_genus <- unname(taxtab[,6]) # made vector with just genus names
+colnames(otutab) <- tax_genus # rename column names of otu table to genus names (assuming order is same)
+identical(rownames(sampledata),rownames(otutab)) # are sample ids in same order for sample data and otu table
+sample_dfgenus = data.frame(sampledata,otutab)
+
+# Comparing mean of last 3 weeks of Eliminations samples vs last 3 weeks of Reintroduction samples for Bifidobacterium
+bif_last3 <- sample_dfgenus %>% filter(last3=="Y") %>% group_by(ParticipantID,StudyPhase) %>% summarize(mean_Bifido=mean(Bifidobacterium))
+bif_last3$StudyPhase <- as.factor(bif_last3$StudyPhase)
+
+# Figure with boxplot and lines connecting sample-means per participant - Bifidobacterium
+my_comparisons <- list( c("Elimination", "Reintroduction") ) #
+
+ggplot(bif_last3, aes(x = StudyPhase, y = mean_Bifido,fill=StudyPhase)) +
+  geom_point() +  geom_line(aes(group=ParticipantID), alpha = .3) + geom_boxplot(alpha = .3) +xlab("Study Phase") + ylab("Mean Fraction of Bifidobacteria in Samples") + scale_fill_manual(name="Study Phase", values=c("Elimination"="#D95F02","Reintroduction"="#7570B3"),labels=c("Last 3 weeks\nof Elimination\n","Last 3 weeks\nof Reintroduction\n"))+stat_compare_means(comparisons=my_comparisons,method="wilcox.test",paired=TRUE) +geom_text(x=1.35,y = 0.0713, label = "P =",color = "black")
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Bifido_boxplot_last3elimreintro.png",height=7,width=7)
+
+```
+
+
+```{r Supplementary Figure 2b}
+### SUPPLEMENTARY FIGURE 2b
+
+# Figure with boxplot and lines connecting sample-means per participant - HBT
+sdata <- sample_data(ps_reg) %>% group_by(ParticipantID) %>% summarize_at(c("X1stHBTsum","X2ndHBTsum","X3rdHBTsum","X4thHBTsum"),mean)
+sdata$HBTdif_23 <- abs(sdata$X3rdHBTsum - sdata$X2ndHBTsum) # shift from after baseline HBT to after elimination HBT
+sdata$HBTdif_24 <- abs(sdata$X4thHBTsum - sdata$X2ndHBTsum) # shift from after baseline HBT to after reintroduction HBT
+sdata$HBTdif_12 <- abs(sdata$X1stHBTsum - sdata$X2ndHBTsum) # shift from first baseline HBT to second baseline HBT
+
+hbt_plot <- rename(sdata,'First'='X1stHBTsum')
+hbt_plot <- rename(hbt_plot,'Second'='X2ndHBTsum')
+hbt_plot <- rename(hbt_plot,'Third'='X3rdHBTsum')
+hbt_plot <- rename(hbt_plot,'Fourth'='X4thHBTsum')
+
+hbt_plot_long <- gather(hbt_plot,HBT_num,HBT_AUC,First:Fourth,factor_key=TRUE)
+ggplot(hbt_plot_long, aes(x = HBT_num, y = HBT_AUC,fill=HBT_num)) +
+  geom_point() +  geom_line(aes(group=ParticipantID), alpha = .3) + geom_boxplot(alpha = .3) +xlab("HBT") + ylab("HBT Area Under the Curve") + labs(fill="HBT")+scale_fill_brewer(palette = "BrBG")+scale_x_discrete(name ="HBT",labels=c("First\nBaseline","Second\nBaseline","After\nElimination","After\nReintroduction"))
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/HBT_boxplot_AUC.png")
+
+```
+
+```{r Supplementary Figures 3 and 13}
+### SUPPLEMENTARY FIGURES 3 AND 13
+
+ps_genus = tax_glom(ps_reg, taxrank="Genus") # combine all ASVs to group by genus
+otutab <- otu_table(ps_genus)
+taxtab <- tax_table(ps_genus)
+sampledata <- sample_data(ps_genus)
+taxtab = as(taxtab, "matrix") # forced taxtab into matrix
+tax_genus <- unname(taxtab[,6]) # made vector with just genus names
+colnames(otutab) <- tax_genus # rename column names of otu table to genus names (assuming order is same)
+identical(rownames(sampledata),rownames(otutab)) # are sample ids in same order for sample data and otu table
+sample_dfgenus = data.frame(sampledata,otutab)
+
+ggplot(sample_dfgenus)+geom_point(aes(x=DayofStudySample,y=Bifidobacterium,color=StudyPhase),size=2)+facet_wrap(.~ParticipantID)+xlab("Study Day") + ylab("Fraction of Bifidobacteria in sample")+labs(color="Study Phase")+scale_color_brewer(palette = "Dark2")
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/bifido_abundance_vs_days.png")
+
+ggplot(sample_dfgenus)+geom_point(aes(x=DayofStudySample,y=Ruminococcus_2,color=StudyPhase),size=2)+facet_wrap(.~ParticipantID)+xlab("Study Day") + ylab("Fraction of Ruminococcus_2 in sample")+labs(color="Study Phase")+scale_color_brewer(palette = "Dark2")
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/rumino2_abundance_vs_days.png")
+
+ggplot(sample_dfgenus)+geom_point(aes(x=DayofStudySample,y=Agathobacter,color=StudyPhase),size=2)+facet_wrap(.~ParticipantID)+xlab("Study Day") + ylab("Fraction of Agathobacter in sample")+labs(color="Study Phase")+scale_color_brewer(palette = "Dark2")
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/agatho_abundance_vs_days.png")
+```
+
+```{r Figure 3c}
+### FIGURE 3c
+
+### beta-diversity, Jensen-Shannon distance - jaccard - relative to last sample before elimination
+ps_div <- subset_samples(ps_asv, ParticipantID != 'B1123' & ParticipantID != 'A2222' & ParticipantID != 'A6666' & ParticipantID != 'A9999')
+sample_data(ps_div) <- data.frame(sample_data(ps_div)) %>% mutate(DaysAfterElimination=DayofStudySample-DayofStudyElimination) %>% arrange(ParticipantID,DaysAfterElimination)#%>% filter(WeekCollected!=0&WeekCollected<=12)
+
+#Make the distance matrix:
+dmat <- phyloseq::distance(ps_div, "jaccard", binary = TRUE)
+#Convert to straight matrix, every sample by every sample with respective distances in between:
+dmat.m <- as(dmat, "matrix")
+#Replace upper tri and diag w/ NA such that only have each pair combo represented once:
+dmat.m[upper.tri(dmat.m, diag = TRUE)] <- NA
+#Melt to columns and drop NA so that don't have any samples with themselves:
+dcol <- setNames(reshape2::melt(dmat.m, as.is = TRUE), c("Sam1", "Sam2", "dist")) %>% filter(dist != 'NA')
+## make sample data frame
+disdat <- sample_data(ps_div)%>% as("data.frame")
+#Is it true? Have we recovered the correct number of pairwise distances?
+choose(nrow(disdat), 2) == nrow(dcol) 
+#Extend the sample data:
+sam1 <- disdat %>% select(ParticipantID, BarcodeSequence, StudyPhase, DayofStudySample, WeekCollected, DayofStudyElimination, DayofStudyReintroduction, X3rdHBTtolerance) %>% rownames_to_column(var = "Sam1") %>%
+  rename(ParticipantID.1 = ParticipantID, BarcodeSequence.1 = BarcodeSequence, StudyPhase.1 = StudyPhase, DayofStudySample.1 = DayofStudySample, WeekCollected.1 = WeekCollected,X3rdHBTtolerance.1=X3rdHBTtolerance)
+sam2 <- disdat %>% select(ParticipantID, BarcodeSequence, StudyPhase, DayofStudySample, WeekCollected, DayofStudyElimination, DayofStudyReintroduction, X3rdHBTtolerance) %>% rownames_to_column(var = "Sam2") %>%
+  rename(ParticipantID.2 = ParticipantID, BarcodeSequence.2 = BarcodeSequence, StudyPhase.2 = StudyPhase, DayofStudySample.2 = DayofStudySample, WeekCollected.2 = WeekCollected,X3rdHBTtolerance.2=X3rdHBTtolerance)
+# Combine the metadata info for each sample id pair and their respective distance
+combined <- left_join(dcol, sam1, by = "Sam1") %>% left_join(sam2, by = "Sam2") %>% mutate(SameID = ParticipantID.1 == ParticipantID.2)
+# create new column with days between samples
+combined <- combined %>% mutate(DaysBetween = abs(DayofStudySample.1-DayofStudySample.2))
+# label if the samples were taken from the same phase or not
+combined <- combined %>% mutate(SamePhase = (StudyPhase.1 == StudyPhase.2))
+# only keep samples that are both from the same subject
+combined.same <- combined %>% filter(SameID == TRUE)
+
+# Label the sample for each participant that is the last one before elimination
+baseline_ids <- (data.frame(sample_data(ps_reg)) %>% filter(StudyPhase=="Baseline") %>% group_by(ParticipantID) %>% filter(DayofStudySample==max(DayofStudySample)))$BarcodeSequence
+combined.same.baseline <- combined.same %>% mutate(is_baseline = ifelse(BarcodeSequence.1 %in% baseline_ids | BarcodeSequence.2 %in% baseline_ids,'Y','N'))
+
+# Filter to only samples where one of the samples in the pair is a baseline sample
+baseline.only <- combined.same.baseline %>% filter(is_baseline=="Y")
+baseline.only <- baseline.only %>% mutate(day_nonbaseline = ifelse(BarcodeSequence.1 %in% baseline_ids,DayofStudySample.2,DayofStudySample.1))
+#gap_bin_labels<- c("1a","1b","2a","2b","3a","3b","4a","4b","5a","5b","6a","6b","7a","7b","8a","8b","9a","9b","10a","10b","11a","11b","12a","12b")
+gap_bin_labels<- c("0.5","1","1.5","2","2.5","3","3.5","4","4.5","5","5.5","6","6.5","7","7.5","8","8.5","9","9.5","10","10.5","11","11.5","12")
+baseline.only$gap_bins_nonbaseline <- cut(baseline.only$day_nonbaseline, labels=gap_bin_labels,breaks=c(seq(-1,82,3.5),max(baseline.only$day_nonbaseline)))
+set.seed(0)
+baseline.only.gap <- baseline.only %>% group_by(ParticipantID.1,gap_bins_nonbaseline) %>% sample_n(1)
+ggplot(baseline.only.gap)+geom_point(aes(x=gap_bins_nonbaseline,y=dist,color=ParticipantID.1,shape=X3rdHBTtolerance.1),size=3) + 
+  geom_boxplot(alpha=0.3,aes(x=gap_bins_nonbaseline,y=dist)) + xlab("Lag (in Weeks)") + scale_shape_manual(name = "Tolerance", labels = c("Clinically defined\nintolerance", "Clinically defined\ntolerance"),values=c(19,17))+
+  ylab("Jaccard distance between samples\nand the respective subject's last sample before elimination") + #geom_vline(aes(xintercept=4.5,linetype="Complete Dairy Elimination\n"),color="#D95F02",size=1)+
+ # geom_vline(aes(xintercept=12.5,linetype="Gradual Milk Reintroduction"),color="#7570B3",size=1)+
+  theme(axis.text.x = element_text(angle = 50, vjust = 1, hjust=1))+scale_linetype_manual(name = "Dietary Intervention", values = c(2,2), guide = guide_legend(override.aes = list(color = c("#D95F02","#7570B3"))))+labs(color="Subject ID")+scale_color_brewer(palette = "Paired") 
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/betadiversity_gapbins_jaccard.png",width=10,height=10)
+```
+
+```{r Supplementary Figure 4}
+### SUPPLEMENTARY FIGURE 4
+
+# α-diversity, Shannon’s Diversity Index
+ps_div <- subset_samples(ps_asv, ParticipantID != 'B1123' & ParticipantID != 'A2222' & ParticipantID != 'A6666' & ParticipantID != 'A9999')
+sample_data(ps_div) <- data.frame(sample_data(ps_div)) %>% mutate(DaysAfterElimination=DayofStudySample-DayofStudyElimination) %>% arrange(ParticipantID,DaysAfterElimination)#%>% filter(WeekCollected!=0&WeekCollected<=12)
+ps_div_short <- ps_div
+sample_data(ps_div_short) <- data.frame(sample_data(ps_div)) %>% filter(WeekCollected!=0&WeekCollected<=12)
+
+gap_bin_labels<- c("0.5","1","1.5","2","2.5","3","3.5","4","4.5","5","5.5","6","6.5","7","7.5","8","8.5","9","9.5","10","10.5","11","11.5","12")
+sample_data(ps_div)$gap_bins <- cut(sample_data(ps_div)$DayofStudySample, labels=gap_bin_labels,breaks=c(seq(-1,82,3.5),max(sample_data(ps_div)$DayofStudySample)))
+set.seed(0)
+gap_ids <- (data.frame(sample_data(ps_div)) %>% group_by(ParticipantID,gap_bins) %>% sample_n(1))$BarcodeSequence
+ps_div_gap <- subset_samples(ps_div,BarcodeSequence %in% gap_ids)
+plot_richness(ps_div_gap,x="gap_bins",measures=c("Shannon"))+ geom_point(aes(color=ParticipantID),size=3)+  
+  geom_boxplot(alpha = .3,aes(group=gap_bins)) +xlab("Study Week") + ylab("a-diversity\n (Shannon Diversity Index)")+geom_vline(aes(xintercept=4.5,linetype="Complete Dairy Elimination\n"),color="#D95F02",size=1)+
+  geom_vline(aes(xintercept=12.5,linetype="Gradual Milk Reintroduction"),color="#7570B3",size=1)+ theme(axis.text.x = element_text(angle = 50, vjust = 1, hjust=1),axis.text =element_text(size=12),axis.title=element_text(size=14),legend.title=element_text(size=14),legend.text=element_text(size=12))+scale_linetype_manual(name = "Dietary Intervention", values = c(2,2), guide = guide_legend(override.aes = list(color = c("#D95F02","#7570B3"))))+
+  labs(color="Subject ID")+scale_color_brewer(palette = "Paired")
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/alphadiversity_halfweekbins.png",width=10,height=10)
+
+```
+
+```{r Supplementary Figure 5a and b}
+### SUPPLEMENTARY FIGURE 5a and 5b
+
+# Bray-Curtis, all participants
+out.ord = ordinate(ps_reg, method = "PCoA", distance = "bray")
+bc.evals = out.ord$values$Eigenvalues
+plot_ordination(ps_reg, out.ord, color = "ParticipantID")+labs(color="Subject ID")+scale_color_brewer(palette = "Paired")
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/pcoa_bray_participandID.png")
+plot_ordination(ps_reg, out.ord, color = "StudyPhase")+labs(color="Study Phase")+scale_color_brewer(palette = "Dark2")
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/pcoa_bray_studyphase.png")
+
+```
+
+```{r Supplementary Figure 5c}
+### SUPPLEMENTARY FIGURE 5c
+
+# beta-diversity, Jensen-Shannon distance - bray curtis
+#Make the distance matrix:
+dmat <- phyloseq::distance(ps_div, "bray")
+#Convert to straight matrix, every sample by every sample with respective distances in between:
+dmat.m <- as(dmat, "matrix")
+#Replace upper tri and diag w/ NA such that only have each pair combo represented once:
+dmat.m[upper.tri(dmat.m, diag = TRUE)] <- NA
+#Melt to columns and drop NA so that don't have any samples with themselves:
+dcol <- as.data.frame(setNames(reshape2::melt(dmat.m, as.is = TRUE), c("Sam1", "Sam2", "dist"))) %>% filter(dist != 'NA')
+## make sample data frame
+disdat <- sample_data(ps_div)%>% as("data.frame")
+#Is it true? Have we recovered the correct number of pairwise distances?
+choose(nrow(disdat), 2) == nrow(dcol) 
+#Extend the sample data:
+sam1 <- disdat %>% select(ParticipantID, BarcodeSequence, StudyPhase, DayofStudySample, WeekCollected, DayofStudyElimination, DayofStudyReintroduction, X3rdHBTtolerance) %>% rownames_to_column(var = "Sam1") %>%
+  rename(ParticipantID.1 = ParticipantID, BarcodeSequence.1 = BarcodeSequence, StudyPhase.1 = StudyPhase, DayofStudySample.1 = DayofStudySample, WeekCollected.1 = WeekCollected,X3rdHBTtolerance.1=X3rdHBTtolerance)
+sam2 <- disdat %>% select(ParticipantID, BarcodeSequence, StudyPhase, DayofStudySample, WeekCollected, DayofStudyElimination, DayofStudyReintroduction, X3rdHBTtolerance) %>% rownames_to_column(var = "Sam2") %>%
+  rename(ParticipantID.2 = ParticipantID, BarcodeSequence.2 = BarcodeSequence, StudyPhase.2 = StudyPhase, DayofStudySample.2 = DayofStudySample, WeekCollected.2 = WeekCollected,X3rdHBTtolerance.2=X3rdHBTtolerance)
+# Combine the metadata info for each sample id pair and their respective distance
+combined <- left_join(dcol, sam1, by = "Sam1") %>% left_join(sam2, by = "Sam2") %>% mutate(SameID = ParticipantID.1 == ParticipantID.2)
+# create new column with days between samples
+combined <- combined %>% mutate(DaysBetween = abs(DayofStudySample.1-DayofStudySample.2))
+# label if the samples were taken from the same phase or not
+combined <- combined %>% mutate(SamePhase = (StudyPhase.1 == StudyPhase.2))
+# only keep samples that are both from the same subject
+combined.same <- combined %>% filter(SameID == TRUE)
+
+# Label the sample for each participant that is the last one before elimination
+baseline_ids <- (data.frame(sample_data(ps_reg)) %>% filter(StudyPhase=="Baseline") %>% group_by(ParticipantID) %>% filter(DayofStudySample==max(DayofStudySample)))$BarcodeSequence
+combined.same.baseline <- combined.same %>% mutate(is_baseline = ifelse(BarcodeSequence.1 %in% baseline_ids | BarcodeSequence.2 %in% baseline_ids,'Y','N'))
+
+baseline.only <- combined.same.baseline %>% filter(is_baseline=="Y")
+baseline.only <- baseline.only %>% mutate(day_nonbaseline = ifelse(BarcodeSequence.1 %in% baseline_ids,DayofStudySample.2,DayofStudySample.1))
+gap_bin_labels<- c("0.5","1","1.5","2","2.5","3","3.5","4","4.5","5","5.5","6","6.5","7","7.5","8","8.5","9","9.5","10","10.5","11","11.5","12")
+baseline.only$gap_bins_nonbaseline <- cut(baseline.only$day_nonbaseline, labels=gap_bin_labels,breaks=c(seq(-1,82,3.5),max(baseline.only$day_nonbaseline)))
+set.seed(0)
+baseline.only.gap <- baseline.only %>% group_by(ParticipantID.1,gap_bins_nonbaseline) %>% sample_n(1)
+ggplot(baseline.only.gap)+geom_point(aes(x=gap_bins_nonbaseline,y=dist,color=ParticipantID.1,shape=X3rdHBTtolerance.1),size=3) + 
+  geom_boxplot(alpha=0.3,aes(x=gap_bins_nonbaseline,y=dist)) + xlab("Lag (in Weeks)") + scale_shape_manual(name = "Tolerance", labels = c("Clinically defined\nintolerance", "Clinically defined\ntolerance"),values=c(19,17))+
+  ylab("Bray-Curtis distance between samples\nand the respective subject's last sample before elimination") +#geom_vline(aes(xintercept=4.5,linetype="Complete Dairy Elimination\n"),color="#D95F02",size=1)+
+  #geom_vline(aes(xintercept=12.5,linetype="Gradual Milk Reintroduction"),color="#7570B3",size=1)+
+  theme(axis.text.x = element_text(angle = 50, vjust = 1, hjust=1),axis.text =element_text(size=12),axis.title=element_text(size=14),legend.title=element_text(size=14),legend.text=element_text(size=12))+scale_linetype_manual(name = "Dietary Intervention", values = c(2,2), guide = guide_legend(override.aes = list(color = c("#D95F02","#7570B3"))))+labs(color="Subject ID")+scale_color_brewer(palette = "Paired") 
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/betadiversity_gapbins.png",width=10,height=10)
+
+```
+
+```{r Supplementary Figure 6 and 7}
+### SUPPLEMENTARY FIGURES 6 and 7
+
+ps_names <- ps_reg
+names = as.vector(unique(sample_data(ps_names)[["ParticipantID"]]))
+plotg = list()
+ps_glom = tax_glom(ps_names, taxrank="Genus") # combine all ASVs to group by genus
+# count data with dif levels of seq for each, so transform to relative abundance, dividing individual sample counts by total sample counts for each sample
+ps_glom_transformed <- transform_sample_counts(ps_glom, function(x) x/sum(x)) # x is taxa count in sample then divide that by total count
+# each sample now has all of the taxa abundance in it together = 1 for each sample
+otutab <- otu_table(ps_glom_transformed)
+taxtab <- tax_table(ps_glom_transformed)
+sampledata <- sample_data(ps_glom_transformed)
+taxtab = as(taxtab, "matrix") # forced taxtab into matrix
+tax_genus <- unname(taxtab[,6]) # made vector with just genus names
+colnames(otutab) <- tax_genus # rename column names of otu table to genus names (assuming order is same)
+identical(rownames(sampledata),rownames(otutab)) # are sample ids in same order for sample data and otu table
+sample_df = data.frame(sampledata,otutab) # make a data frame with otu data added to respective samples in sample data
+
+abunE = list()
+HBTsumE = list()
+abunN = list()
+HBTsumN = list()
+abunR = list()
+HBTsumR = list()
+abunF = list()
+HBTsumF = list()
+genus = "Bifidobacterium"
+samplenamesE = list()
+samplenamesN = list()
+samplenamesR = list()
+samplenamesF = list()
+for (i in names) {
+  sample_dftemp = subset(sample_df,ParticipantID == i)
+  elim_day = unique((sample_data(sample_dftemp))[["DayofStudyElimination"]])
+  elim_sample = subset_samples(sample_data(sample_dftemp), DayofStudySample == elim_day)
+  elim_sample = as.matrix(elim_sample)
+  elim_abun = as.numeric(elim_sample[,genus])
+  elim_HBT = as.numeric(elim_sample[,"X2ndHBTsum"])
+  abunE[[i]] = elim_abun
+  HBTsumE[[i]] = elim_HBT
+  samplenamesE[[i]] = rownames(elim_sample)
+  if (i != "B3345") {
+  reint_day = min((sample_data(sample_dftemp))[["DayofStudyReintroduction"]])
+  reint_day1 = reint_day-1
+  if ((length(colnames(sample_dftemp[sample_dftemp$DayofStudySample == reint_day]))) == 0) {reint_sample = subset_samples(sample_data(sample_dftemp), DayofStudySample == reint_day1)
+  } else {
+  reint_sample = subset_samples(sample_data(sample_dftemp), DayofStudySample == reint_day)} }
+  else {reint_sample = subset_samples(sample_data(sample_dftemp), DayofStudySample == reint_day+2)}
+  reint_sample = as.matrix(reint_sample)
+  reint_abun = as.numeric(reint_sample[,genus])
+  reint_HBT = as.numeric(reint_sample[,"X3rdHBTsum"])
+  abunR[[i]] = reint_abun
+  HBTsumR[[i]] = reint_HBT
+  samplenamesR[[i]] = rownames(reint_sample)
+  first_sample = subset_samples(sample_data(sample_dftemp), DayofStudySample == min(DayofStudySample))
+  first_sample = as.matrix(first_sample)
+  first_abun = mean(as.numeric(first_sample[,genus]))
+  first_HBT = mean(as.numeric(first_sample[,"X1stHBTsum"]))
+  abunF[[i]] = first_abun
+  HBTsumF[[i]] = first_HBT
+  samplenamesF[[i]] = rownames(first_sample)
+  end_sample = subset_samples(sample_data(sample_dftemp), DayofStudySample == max(DayofStudySample))
+  end_sample = as.matrix(end_sample)
+  end_abun = as.numeric(end_sample[,genus])
+  end_HBT = as.numeric(end_sample[,"X4thHBTsum"])
+  abunN[[i]] = end_abun
+  HBTsumN[[i]] = end_HBT
+  samplenamesN[[i]] = rownames(end_sample)
+  print(i)
+}
+abundance <- list()
+abundance[["HBT1"]] <- bind_rows(abunF) %>% mutate(HBT_num='1')
+abundance[["HBT2"]] <- bind_rows(abunE) %>% mutate(HBT_num='2')
+abundance[["HBT3"]] <- bind_rows(abunR) %>% mutate(HBT_num='3')
+abundance[["HBT4"]] <- bind_rows(abunN) %>% mutate(HBT_num='4')
+abun <- bind_rows(abundance)
+abun_long <- gather(abun,ParticipantID,bifido_abun,A8888:B9901,factor_key=TRUE)
+hbt_symp_full <- read_excel("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/HBTsymptoms.xlsx")
+hbt_symp <- filter(hbt_symp_full, ParticipantID != 'B1123' & ParticipantID != 'A2222' & ParticipantID != 'A6666' & ParticipantID != 'A9999')
+hbt_symp$HBT1 <- as.numeric(hbt_symp$HBT1)
+hbt_symp$HBT2 <- as.numeric(hbt_symp$HBT2)
+hbt_symp$HBT3 <- as.numeric(hbt_symp$HBT3)
+hbt_symp$HBT4 <- as.numeric(hbt_symp$HBT4)
+
+hbt_symp_long <- gather(hbt_symp,HBT_num,symp,matches("HBT"),factor_key=TRUE)
+hbt_symp_long$HBT_num <- gsub("HBT","",hbt_symp_long$HBT_num)
+hbt_full_symp <- left_join(hbt_full,hbt_symp_long,by=c('ParticipantID','HBT_num'))
+hbt_full_symp_abun <- left_join(hbt_full_symp,abun_long)
+ggplot(data=hbt_full_symp_abun,aes(bifido_abun,AUC))+geom_point(aes(color=ParticipantID))+#facet_wrap(.~ParticipantID)+
+  xlab("Fraction of Bifidobacteria in sample nearest HBT")+ylab("Area Under the Curve of HBT")+labs(color="Subject ID")+scale_color_brewer(palette = "Paired") 
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/bifido_abundance_vs_AUC.png")
+ggplot(data=hbt_full_symp_abun,aes(bifido_abun,AUC))+geom_point(aes(color=ParticipantID))+facet_wrap(.~ParticipantID)+
+  xlab("Fraction of Bifidobacteria in sample nearest HBT")+ylab("Area Under the Curve of HBT")+labs(color="Subject ID")+scale_color_brewer(palette = "Paired") 
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/bifido_abundance_vs_AUC_byparticipant.png")
+ggplot(data=hbt_full_symp_abun,aes(bifido_abun,symp))+geom_point(aes(color=ParticipantID),size=3)+#facet_wrap(.~ParticipantID)+
+  xlab("Fraction of Bifidobacteria in sample nearest HBT")+ylab("HBT symptoms (0=none)")+labs(color="Subject ID")+scale_color_brewer(palette = "Paired") 
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/bifido_abundance_vs_symp.png")
+ggplot(data=hbt_full_symp_abun,aes(bifido_abun,X3rdHBTtolerance))+geom_point(aes(color=ParticipantID),size=3)+#facet_wrap(.~ParticipantID)+
+  xlab("Fraction of Bifidobacteria in sample nearest HBT")+ylab("Clinical Tolerance")+labs(color="Subject ID")+scale_color_brewer(palette = "Paired")  # note: tolerance did not change throughout for any participants so could use any HBT test but chose this one because it was complete
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/bifido_abundance_vs_clintol.png")
+
+cor.test(hbt_full_symp_abun$AUC, hbt_full_symp_abun$symp, method=c("pearson"))
+cor.test(hbt_full_symp_abun$AUC, hbt_full_symp_abun$bifido_abun, method=c("pearson"))
+cor.test(hbt_full_symp_abun$bifido_abun, hbt_full_symp_abun$symp, method=c("pearson"))
+t.test(filter(hbt_full_symp_abun,X3rdHBTtolerance=="I")$bifido_abun, filter(hbt_full_symp_abun,X3rdHBTtolerance=="T")$bifido_abun, method=c("pearson"))
+
+# Checking for only samples with Bifido abundance > 0.015
+bifido_filt <- hbt_full_symp_abun$bifido_abun[hbt_full_symp_abun$bifido_abun>0.015]
+auc_filt <- hbt_full_symp_abun$AUC[hbt_full_symp_abun$bifido_abun>0.015]
+symp_filt <- hbt_full_symp_abun$symp[hbt_full_symp_abun$bifido_abun>0.015]
+cor.test(auc_filt, symp_filt, method=c("pearson"))
+cor.test(auc_filt, bifido_filt, method=c("pearson"))
+cor.test(bifido_filt, symp_filt, method=c("pearson"))
+```
+
+```{r Supplementary Figure 8}
+### SUPPLEMENTARY FIGURE 8
+
+#Bray-Curtis, participants who collected samples regularly and did all 3 study phases, pcoa wrapped and scaled by participantID vs Day of Study
+names = as.vector(unique(sample_data(ps_reg)[["ParticipantID"]]))
+plotg = list()
+for (i in names) {
+  temp = subset_samples(ps_reg, ParticipantID == i)
+  transform_compositional = function(temp) {
+    otu_table(temp) = otu_table(
+      get_taxa(temp) / rowSums(get_taxa(temp)),
+      taxa_are_rows = FALSE
+    )
+    temp
+  }
+  ps_comp = transform_compositional(temp)
+  out.ord = ordinate(ps_comp, method = "PCoA", distance = "bray")
+  bc.evals = out.ord$values$Eigenvalues
+  plotg[[i]] <- ggplot(data.frame(out.ord$vectors, sample_data(ps_comp))) +
+    geom_point(aes(y = Axis.1, x = DayofStudySample, color = StudyPhase), size = 1)+
+    theme(panel.border = element_rect("transparent")) + theme(legend.position="none")  + ggtitle(i) +
+    labs(
+      "x" = "Study Day",
+      "y" = "Bray-Curtis PCoA Axis 1")+scale_color_brewer(palette = "Dark2")
+}
+layout <- matrix(c(1:length(names)), nrow = 3, byrow = TRUE)
+multiplot(plotlist = plotg, layout = layout)
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/pcoa1_bray_vs_day_wrapbyparticipant.png",multiplot(plotlist = plotg, layout = layout),height=7,width=7)
+
+#Bray-Curtis, participants who collected samples regularly and did all 3 study phases, pcoa wrapped and scaled by participantID vs Day of Study
+names = as.vector(unique(sample_data(ps_reg)[["ParticipantID"]]))
+plotg = list()
+for (i in names) {
+  temp = subset_samples(ps_reg, ParticipantID == i)
+  transform_compositional = function(temp) {
+    otu_table(temp) = otu_table(
+      get_taxa(temp) / rowSums(get_taxa(temp)),
+      taxa_are_rows = FALSE
+    )
+    temp
+  }
+  ps_comp = transform_compositional(temp)
+  out.ord = ordinate(ps_comp, method = "PCoA", distance = "bray")
+  bc.evals = out.ord$values$Eigenvalues
+  plotg[[i]] <- ggplot(data.frame(out.ord$vectors, sample_data(ps_comp))) +
+    geom_point(aes(y = Axis.2, x = DayofStudySample, color = StudyPhase), size = 1)+
+    theme(panel.border = element_rect("transparent")) + theme(legend.position="none")  + ggtitle(i) +
+    labs(
+      "x" = "Study Day",
+      "y" = "Bray-Curtis PCoA Axis 2")+scale_color_brewer(palette = "Dark2")
+}
+layout <- matrix(c(1:length(names)), nrow = 3, byrow = TRUE)
+multiplot(plotlist = plotg, layout = layout)
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/pcoa2_bray_vs_day_wrapbyparticipant.png",multiplot(plotlist = plotg, layout = layout),height=7,width=7)
+
+#Bray-Curtis, participants who collected samples regularly and did all 3 study phases, pcoa wrapped and scaled by participantID vs Day of Study
+names = as.vector(unique(sample_data(ps_reg)[["ParticipantID"]]))
+plotg = list()
+for (i in names) {
+  temp = subset_samples(ps_reg, ParticipantID == i)
+  transform_compositional = function(temp) {
+    otu_table(temp) = otu_table(
+      get_taxa(temp) / rowSums(get_taxa(temp)),
+      taxa_are_rows = FALSE
+    )
+    temp
+  }
+  ps_comp = transform_compositional(temp)
+  out.ord = ordinate(ps_comp, method = "PCoA", distance = "bray")
+  bc.evals = out.ord$values$Eigenvalues
+  plotg[[i]] <- ggplot(data.frame(out.ord$vectors, sample_data(ps_comp))) +
+    geom_point(aes(y = Axis.3, x = DayofStudySample, color = StudyPhase), size = 1)+
+    theme(panel.border = element_rect("transparent")) + theme(legend.position="none")  + ggtitle(i) +
+    labs(
+      "x" = "Study Day",
+      "y" = "Bray-Curtis PCoA Axis 3")+scale_color_brewer(palette = "Dark2")
+}
+layout <- matrix(c(1:length(names)), nrow = 3, byrow = TRUE)
+multiplot(plotlist = plotg, layout = layout)
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/pcoa3_bray_vs_day_wrapbyparticipant.png",multiplot(plotlist = plotg, layout = layout),height=7,width=7)
+
+#Jaccard, participants who collected samples regularly and did all 3 study phases, pcoa wrapped and scaled by participantID vs Day of Study
+for (i in names) {
+  temp = subset_samples(ps_reg, ParticipantID == i)
+  transform_compositional = function(temp) {
+    otu_table(temp) = otu_table(
+      get_taxa(temp) / rowSums(get_taxa(temp)),
+      taxa_are_rows = FALSE
+    )
+    temp
+  }
+  ps_comp = transform_compositional(temp)
+  out.ord = ordinate(ps_comp, method = "PCoA", distance = "jaccard",binary="TRUE")
+  bc.evals = out.ord$values$Eigenvalues
+  plotg[[i]] <- ggplot(data.frame(out.ord$vectors, sample_data(ps_comp))) +
+    geom_point(aes(y = Axis.1, x = DayofStudySample, color = StudyPhase), size = 1)+
+    theme(panel.border = element_rect("transparent")) + theme(legend.position="none") + ggtitle(i) +
+    labs(
+      "x" = "Study Day",
+      "y" = "Jaccard PCoA Axis 1")+scale_color_brewer(palette = "Dark2")
+}
+layout <- matrix(c(1:length(names)), nrow = 3, byrow = TRUE)
+multiplot(plotlist = plotg, layout = layout)
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/pcoa1_jaccard_vs_day_wrapbyparticipant.png",multiplot(plotlist = plotg, layout = layout),height=7,width=7)
+
+#Jaccard, participants who collected samples regularly and did all 3 study phases, pcoa wrapped and scaled by participantID vs Day of Study
+for (i in names) {
+  temp = subset_samples(ps_reg, ParticipantID == i)
+  transform_compositional = function(temp) {
+    otu_table(temp) = otu_table(
+      get_taxa(temp) / rowSums(get_taxa(temp)),
+      taxa_are_rows = FALSE
+    )
+    temp
+  }
+  ps_comp = transform_compositional(temp)
+  out.ord = ordinate(ps_comp, method = "PCoA", distance = "jaccard",binary="TRUE")
+  bc.evals = out.ord$values$Eigenvalues
+  plotg[[i]] <- ggplot(data.frame(out.ord$vectors, sample_data(ps_comp))) +
+    geom_point(aes(y = Axis.2, x = DayofStudySample, color = StudyPhase), size = 1)+
+    theme(panel.border = element_rect("transparent")) + theme(legend.position="none") + ggtitle(i) +
+    labs(
+      "x" = "Study Day",
+      "y" = "Jaccard PCoA Axis 2")+scale_color_brewer(palette = "Dark2")
+}
+layout <- matrix(c(1:length(names)), nrow = 3, byrow = TRUE)
+multiplot(plotlist = plotg, layout = layout)
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/pcoa2_jaccard_vs_day_wrapbyparticipant.png",multiplot(plotlist = plotg, layout = layout),height=7,width=7)
+
+#Jaccard, participants who collected samples regularly and did all 3 study phases, pcoa wrapped and scaled by participantID vs Day of Study
+for (i in names) {
+  temp = subset_samples(ps_reg, ParticipantID == i)
+  transform_compositional = function(temp) {
+    otu_table(temp) = otu_table(
+      get_taxa(temp) / rowSums(get_taxa(temp)),
+      taxa_are_rows = FALSE
+    )
+    temp
+  }
+  ps_comp = transform_compositional(temp)
+  out.ord = ordinate(ps_comp, method = "PCoA", distance = "jaccard",binary="TRUE")
+  bc.evals = out.ord$values$Eigenvalues
+  plotg[[i]] <- ggplot(data.frame(out.ord$vectors, sample_data(ps_comp))) +
+    geom_point(aes(y = Axis.3, x = DayofStudySample, color = StudyPhase), size = 1)+
+    theme(panel.border = element_rect("transparent")) + theme(legend.position="none") + ggtitle(i) +
+    labs(
+      "x" = "Study Day",
+      "y" = "Jaccard PCoA Axis 3")+scale_color_brewer(palette = "Dark2")
+}
+layout <- matrix(c(1:length(names)), nrow = 3, byrow = TRUE)
+multiplot(plotlist = plotg, layout = layout)
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/pcoa3_jaccard_vs_day_wrapbyparticipant.png",multiplot(plotlist = plotg, layout = layout),height=7,width=7)
+
+```
+
+```{r Supplementary Figure 10a}
+### SUPPLEMENTARY FIGURE 10a
+
+# Autocorrelation analysis - BRAY-CURTIS method
+# Defining autocorrelation as the number of days it typically takes until distance between samples is greater than or equal to 90% of the median distance chosen between any two randomly chosen samples from that participant throughout the study
+
+# ps_reg is the phyloseq object
+
+## STEP 1: Calculate distance between every pair of two samples both from the same subject
+#Make the distance matrix:
+dmat <- phyloseq::distance(ps_reg, "bray")
+
+#Convert to straight matrix, every sample by every sample with respective distances in between:
+dmat.m <- as(dmat, "matrix")
+
+#Replace upper tri and diag w/ NA such that only have each pair combo represented once:
+dmat.m[upper.tri(dmat.m, diag = TRUE)] <- NA
+
+#Melt to columns and drop NA so that don't have any samples with themselves:
+dcol <- setNames(reshape2::melt(dmat.m, as.is = TRUE), c("Sam1", "Sam2", "dist")) %>% filter(dist != 'NA')
+
+#Make sample data frame
+disdat <- sample_data(ps_reg)%>% as("data.frame")
+
+# Have we recovered the correct number of pairwise distances?
+choose(nrow(disdat), 2) == nrow(dcol) 
+
+#Extend the sample data:
+sam1 <- disdat %>% select(ParticipantID, StudyPhase, DayofStudySample, WeekCollected, DayofStudyElimination, DayofStudyReintroduction) %>% rownames_to_column(var = "Sam1") %>%
+  rename(ParticipantID.1 = ParticipantID, StudyPhase.1 = StudyPhase, DayofStudySample.1 = DayofStudySample, WeekCollected.1 = WeekCollected)
+sam2 <- disdat %>% select(ParticipantID, StudyPhase, DayofStudySample, WeekCollected, DayofStudyElimination, DayofStudyReintroduction) %>% rownames_to_column(var = "Sam2") %>%
+  rename(ParticipantID.2 = ParticipantID, StudyPhase.2 = StudyPhase, DayofStudySample.2 = DayofStudySample, WeekCollected.2 = WeekCollected)
+
+#Combine the metadata info for each sample id pair and their respective distance
+combined <- left_join(dcol, sam1, by = "Sam1") %>% left_join(sam2, by = "Sam2") %>% mutate(SameID = ParticipantID.1 == ParticipantID.2)
+
+#Create new column with days between samples
+combined <- combined %>% mutate(DaysBetween = abs(DayofStudySample.1-DayofStudySample.2))
+
+#Label if the samples were taken from the same phase or not
+combined <- combined %>% mutate(SamePhase = (StudyPhase.1 == StudyPhase.2))
+
+#Only keep samples that are both from the same subject
+combined.same <- combined %>% filter(SameID == TRUE)
+
+# How many times did each participant have a sample within < 2 days of another sample
+filter(combined.same,DaysBetween < 2) %>% group_by(ParticipantID.1) %>% count()
+
+## STEP 2: Calculate the mean/median distance chosen between any two randomly chosen samples from that participant throughout the study for each participant + Calculate the mean/median distance between consecutive samples from the same subject for each participant
+participants <- unique(combined.same$ParticipantID.1)
+summary_list <- list()
+
+for (id in participants){
+  avg_overall <- mean(filter(combined.same,ParticipantID.1==id)$dist)
+  med_overall <- median(filter(combined.same,ParticipantID.1==id)$dist)
+  summary_list[[id]] <- data.frame(avg_overall=avg_overall,med_overall=med_overall,ParticipantID.1=id)
+}
+
+sumstats <- bind_rows(summary_list)
+
+# STEP 3: Bin all samples per individual into half week bins
+gap_bin_labels<- c("0.5","1","1.5","2","2.5","3","3.5","4","4.5","5","5.5","6","6.5","7","7.5","8","8.5","9","9.5","10","10.5","11","11.5")
+combined.same$gap_bin <- cut(combined.same$DaysBetween, labels=gap_bin_labels,breaks=c(seq(-1,78,3.5),max(combined.same$DaysBetween)))
+combined.same.binned <- combined.same %>% group_by(ParticipantID.1,gap_bin) %>% summarize(med_dist=median(dist),avg_dist=mean(dist))
+
+summary_list <- list()
+frac=0.9
+
+for (id in participants){
+  id_med <- filter(sumstats,ParticipantID.1==id)$med_overall
+  id_avg <- filter(sumstats,ParticipantID.1==id)$avg_overall
+  id_autocor_med <- min(as.numeric(as.character(filter(combined.same.binned,ParticipantID.1==id & med_dist >= id_med*frac)$gap_bin)))
+  id_autocor_avg <- min(as.numeric(as.character(filter(combined.same.binned,ParticipantID.1==id & avg_dist >= id_avg*frac)$gap_bin)))
+  summary_list[[id]] <- data.frame(id_autocor_med=id_autocor_med,id_autocor_avg=id_autocor_avg,ParticipantID.1=id,distance_full=id_med)
+}
+
+bray_autocor <- bind_rows(summary_list)
+median(bray_autocor$id_autocor_med*7)
+mean(bray_autocor$id_autocor_avg*7)
+sd(bray_autocor$id_autocor_med*7)
+
+bray_autocor_days = median(bray_autocor$id_autocor_med)*7 # convert from weeks to days
+bray_autocor_dist_100 = median(bray_autocor$distance_full)
+bray_autocor_dist_90 = median(bray_autocor$distance_full)*0.9
+bray_autocor_dist_80 = median(bray_autocor$distance_full)*0.8
+bray_autocor_dist_95 = median(bray_autocor$distance_full)*0.95
+
+### OPTION 2  - check to make sure this way doesn't give dramatically dif answer than main way since slightly arbitrary choice
+combined.same.binned.sumstats <- combined.same.binned %>% group_by(ParticipantID.1) %>% summarize(med_overall=median(med_dist),avg_overall=mean(avg_dist))
+summary_list <- list()
+frac=0.9
+for (id in participants){
+  id_med <- filter(combined.same.binned.sumstats,ParticipantID.1==id)$med_overall
+  id_avg <- filter(combined.same.binned.sumstats,ParticipantID.1==id)$avg_overall
+  id_autocor_med <- min(as.numeric(as.character(filter(combined.same.binned,ParticipantID.1==id & med_dist >= id_med*frac)$gap_bin)))
+  id_autocor_avg <- min(as.numeric(as.character(filter(combined.same.binned,ParticipantID.1==id & avg_dist >= id_avg*frac)$gap_bin)))
+  summary_list[[id]] <- data.frame(id_autocor_med=id_autocor_med,id_autocor_avg=id_autocor_avg,ParticipantID.1=id)
+}
+
+bray_autocor2 <- bind_rows(summary_list)
+median(bray_autocor2$id_autocor_med*7)
+mean(bray_autocor2$id_autocor_avg*7)
+
+# AUTOCORRELATION - BRAY-CURTIS
+bray_autocor_days
+
+ggplot(combined.same)+geom_point(aes(x=abs(DaysBetween),y=dist,color=SamePhase)) +facet_wrap(~ParticipantID.1) + ylim(0,1) + xlab("Gap between samples (days)") + ylab("Bray-Curtis distance between samples") + scale_color_manual(values=c("dodgerblue4", "deepskyblue"),name="Same Study Phase?",labels=c("Samples from same subject,\n different study phase\n","Samples from same subject, \n same study phase"))
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/autocor_bray_indiv_all_med_studyphase.png")
+
+```
+
+```{r Supplementary Figure 10c}
+### SUPPLEMENTARY FIGURE 10c
+
+# ridgeline plot of all sample pairs within a participant distribuion by participant of distances between samples
+# only keep samples that are both from the same subject
+combined.same <- combined %>% filter(SameID == TRUE)
+#samephase <- combined.same %>% filter(SamePhase == TRUE)
+#difphase <- combined.same %>% filter(SamePhase == FALSE)
+#hist(samephase$DaysBetween)
+#hist(difphase$DaysBetween)
+ggplot(combined.same, aes(x = dist, y = ParticipantID.1, fill = SamePhase)) +
+  geom_density_ridges()+labs(x="Bray-Curtis distance between samples",y="Subject ID")+scale_fill_manual(values=c("dodgerblue4", "deepskyblue"),name="Same Study Phase?",labels=c("Samples from same subject,\n different study phase","Samples from same subject, \n same study phase"))
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/autocor_bray_ridge.png")
+
+
+```
+
+```{r Supplementary Figure 9a and c}
+### SUPPLEMENTARY FIGURE 9a and c
+
+ggplot(combined.same)+geom_point(aes(x=abs(DaysBetween),y=dist,color=SamePhase)) + ylim(0,1) + xlab("Gap between samples (days)") + ylab("Bray-Curtis distance between samples") + scale_color_manual(values=c("dodgerblue4", "deepskyblue"),name="Same Study Phase?",labels=c("Samples from same subject,\n different study phase\n","Samples from same subject, \n same study phase"))+geom_hline(aes(yintercept=bray_autocor_dist_90,linetype="90% Median Distance"),color="orange",size=1)+scale_linetype_manual(name = "Autocorrelation Distance", values = c(2,1), guide = guide_legend(override.aes = list(color = c("orange"))))+geom_hline(aes(yintercept=bray_autocor_dist_100,linetype="Median Distance"),color="orange",size=1) # autocorrelation calculated above
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/autocor_bray_3.png")
+
+ggplot(combined.same)+geom_point(aes(x=abs(DaysBetween),y=dist,color=SamePhase)) + ylim(0,1) + xlab("Gap between samples (days)") + ylab("Bray-Curtis distance between samples") + scale_color_manual(values=c("dodgerblue4", "deepskyblue"),name="Same Study Phase?",labels=c("Samples from same subject,\n different study phase\n","Samples from same subject, \n same study phase"))+geom_vline(aes(xintercept=bray_autocor_days,linetype="Typical Time to 90% Median Distance\n Between Random Samples"),color="orange",size=1)+scale_linetype_manual(name = "Autocorrelation time", values = c(2), guide = guide_legend(override.aes = list(color = c("orange")))) # autocorrelation calculated above
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/autocor_bray_3_vertical.png")
+
+ggplot(combined)+geom_point(aes(x=abs(DaysBetween),y=dist,color=SameID)) + ylim(0,1) + xlab("Gap between samples (days)") + ylab("Bray-Curtis distance between samples") + labs(fill = "same subject")+ scale_color_manual(values=c("#999999", "blue3"),name="Same Subject?",labels=c("Samples from different subjects","Samples from the same subject"))
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/autocor_bray_4.png")
+
+```
+
+```{r SUpplementary Figure 12a}
+### SUPPLEMENTARY FIGURE 12a
+
+ggplot(combined.same)+geom_point(aes(x=abs(DaysBetween),y=dist,color=ParticipantID.1)) + ylim(0,1) + xlab("Gap between samples (days)") + ylab("Bray-Curtis distance between samples")+ labs(color="Subject ID")+scale_color_brewer(palette = "Paired") 
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/autocor_bray_3b.png")
+```
+
+```{r Supplementary Figure 10b}
+### SUPPLEMENTARY FIGURE 10b
+
+# Defining autocorrelation as the number of days it typically takes until distance between samples is greater than or equal to 90% of the median (also tried mean) distance chosen between any two randomly chosen samples from that participant throughout the study
+
+## STEP 1: Calculate distance between every pair of two samples both from the same subject
+#Make the distance matrix:
+dmat <- phyloseq::distance(ps_reg, "jaccard", binary = 'True')
+
+#Convert to straight matrix, every sample by every sample with respective distances in between:
+dmat.m <- as(dmat, "matrix")
+
+#Replace upper tri and diag w/ NA such that only have each pair combo represented once:
+dmat.m[upper.tri(dmat.m, diag = TRUE)] <- NA
+
+#Melt to columns and drop NA so that don't have any samples with themselves:
+dcol <- setNames(reshape2::melt(dmat.m, as.is = TRUE), c("Sam1", "Sam2", "dist")) %>% filter(dist != 'NA')
+
+## make sample data frame
+disdat <- sample_data(ps_reg)%>% as("data.frame")
+
+#Is it true? Have we recovered the correct number of pairwise distances?
+choose(nrow(disdat), 2) == nrow(dcol) 
+
+#Extend the sample data:
+sam1 <- disdat %>% select(ParticipantID, StudyPhase, DayofStudySample, WeekCollected, DayofStudyElimination, DayofStudyReintroduction) %>% rownames_to_column(var = "Sam1") %>%
+  rename(ParticipantID.1 = ParticipantID, StudyPhase.1 = StudyPhase, DayofStudySample.1 = DayofStudySample, WeekCollected.1 = WeekCollected)
+sam2 <- disdat %>% select(ParticipantID, StudyPhase, DayofStudySample, WeekCollected, DayofStudyElimination, DayofStudyReintroduction) %>% rownames_to_column(var = "Sam2") %>%
+  rename(ParticipantID.2 = ParticipantID, StudyPhase.2 = StudyPhase, DayofStudySample.2 = DayofStudySample, WeekCollected.2 = WeekCollected)
+
+# Combine the metadata info for each sample id pair and their respective distance
+combined <- left_join(dcol, sam1, by = "Sam1") %>% left_join(sam2, by = "Sam2") %>% mutate(SameID = ParticipantID.1 == ParticipantID.2)
+
+# create new column with days between samples
+combined <- combined %>% mutate(DaysBetween = abs(DayofStudySample.1-DayofStudySample.2))
+
+# label if the samples were taken from the same phase or not
+combined <- combined %>% mutate(SamePhase = (StudyPhase.1 == StudyPhase.2))
+
+# only keep samples that are both from the same subject
+combined.same <- combined %>% filter(SameID == TRUE)
+
+## STEP 2: Calculate the mean/median distance chosen between any two randomly chosen samples from that participant throughout the study for each participant + Calculate the mean/median distance between consecutive samples from the same subject for each participant
+participants <- unique(combined.same$ParticipantID.1)
+summary_list <- list()
+
+for (id in participants){
+  avg_overall <- mean(filter(combined.same,ParticipantID.1==id)$dist)
+  med_overall <- median(filter(combined.same,ParticipantID.1==id)$dist)
+  summary_list[[id]] <- data.frame(avg_overall=avg_overall,med_overall=med_overall,ParticipantID.1=id)
+}
+
+sumstats <- bind_rows(summary_list)
+
+# STEP 3: Bin all samples per individual into half week bins
+gap_bin_labels<- c("0.5","1","1.5","2","2.5","3","3.5","4","4.5","5","5.5","6","6.5","7","7.5","8","8.5","9","9.5","10","10.5","11","11.5")
+combined.same$gap_bin <- cut(combined.same$DaysBetween, labels=gap_bin_labels,breaks=c(seq(-1,78,3.5),max(combined.same$DaysBetween)))
+combined.same.binned <- combined.same %>% group_by(ParticipantID.1,gap_bin) %>% summarize(med_dist=median(dist),avg_dist=mean(dist))
+
+summary_list <- list()
+frac=0.9
+
+for (id in participants){
+  id_med <- filter(sumstats,ParticipantID.1==id)$med_overall
+  id_avg <- filter(sumstats,ParticipantID.1==id)$avg_overall
+  id_autocor_med <- min(as.numeric(as.character(filter(combined.same.binned,ParticipantID.1==id & med_dist >= id_med*frac)$gap_bin)))
+  id_autocor_avg <- min(as.numeric(as.character(filter(combined.same.binned,ParticipantID.1==id & avg_dist >= id_avg*frac)$gap_bin)))
+  summary_list[[id]] <- data.frame(id_autocor_med=id_autocor_med,id_autocor_avg=id_autocor_avg,ParticipantID.1=id,distance_full=id_med)
+}
+
+jaccard_autocor <- bind_rows(summary_list)
+median(jaccard_autocor$id_autocor_med*7)
+mean(jaccard_autocor$id_autocor_avg*7)
+jaccard_autocor_dist_100 = median(jaccard_autocor$distance_full)
+jaccard_autocor_dist_90 = median(jaccard_autocor$distance_full)*0.9
+jaccard_autocor_dist_80 = median(jaccard_autocor$distance_full)*0.8
+jaccard_autocor_dist_95 = median(jaccard_autocor$distance_full)*0.95
+
+jaccard_autocor_days = median(jaccard_autocor$id_autocor_med)*7 # convert from weeks to days
+sd(jaccard_autocor$id_autocor_med*7)
+
+### For other fractions
+summary_list <- list()
+frac=0.8
+for (id in participants){
+  id_med <- filter(sumstats,ParticipantID.1==id)$med_overall
+  id_avg <- filter(sumstats,ParticipantID.1==id)$avg_overall
+  id_autocor_med <- min(as.numeric(as.character(filter(combined.same.binned,ParticipantID.1==id & med_dist >= id_med*frac)$gap_bin)))
+  id_autocor_avg <- min(as.numeric(as.character(filter(combined.same.binned,ParticipantID.1==id & avg_dist >= id_avg*frac)$gap_bin)))
+  summary_list[[id]] <- data.frame(id_autocor_med=id_autocor_med,id_autocor_avg=id_autocor_avg,ParticipantID.1=id)
+}
+
+jaccard_autocor_extra <- bind_rows(summary_list)
+median(jaccard_autocor_extra$id_autocor_med)*7 # convert from weeks to days
+sd(jaccard_autocor_extra$id_autocor_med*7)
+
+summary_list <- list()
+frac=0.95
+for (id in participants){
+  id_med <- filter(sumstats,ParticipantID.1==id)$med_overall
+  id_avg <- filter(sumstats,ParticipantID.1==id)$avg_overall
+  id_autocor_med <- min(as.numeric(as.character(filter(combined.same.binned,ParticipantID.1==id & med_dist >= id_med*frac)$gap_bin)))
+  id_autocor_avg <- min(as.numeric(as.character(filter(combined.same.binned,ParticipantID.1==id & avg_dist >= id_avg*frac)$gap_bin)))
+  summary_list[[id]] <- data.frame(id_autocor_med=id_autocor_med,id_autocor_avg=id_autocor_avg,ParticipantID.1=id)
+}
+
+jaccard_autocor_extra <- bind_rows(summary_list)
+median(jaccard_autocor_extra$id_autocor_med)*7 # convert from weeks to days
+sd(jaccard_autocor_extra$id_autocor_med*7)
+
+### OPTION 2 - check to make sure this way doesn't give dramatically dif answer than main way since slightly arbitrary choice
+combined.same.binned.sumstats <- combined.same.binned %>% group_by(ParticipantID.1) %>% summarize(med_overall=median(med_dist),avg_overall=mean(avg_dist))
+summary_list <- list()
+frac=0.9
+for (id in participants){
+  id_med <- filter(combined.same.binned.sumstats,ParticipantID.1==id)$med_overall
+  id_avg <- filter(combined.same.binned.sumstats,ParticipantID.1==id)$avg_overall
+  id_autocor_med <- min(as.numeric(as.character(filter(combined.same.binned,ParticipantID.1==id & med_dist >= id_med*frac)$gap_bin)))
+  id_autocor_avg <- min(as.numeric(as.character(filter(combined.same.binned,ParticipantID.1==id & avg_dist >= id_avg*frac)$gap_bin)))
+  summary_list[[id]] <- data.frame(id_autocor_med=id_autocor_med,id_autocor_avg=id_autocor_avg,ParticipantID.1=id)
+}
+
+jaccard_autocor2 <- bind_rows(summary_list)
+median(jaccard_autocor2$id_autocor_med)*7
+mean(jaccard_autocor2$id_autocor_avg)*7
+
+# Autocorrelation - Jaccard
+jaccard_autocor_days # days
+sd(jaccard_autocor$id_autocor_med*7) # SD
+
+ggplot(combined.same)+geom_point(aes(x=abs(DaysBetween),y=dist,color=SamePhase)) +facet_wrap(~ParticipantID.1) + ylim(0,1) + xlab("Gap between samples (days)") + ylab("Jaccard distance between samples") + scale_color_manual(values=c("dodgerblue4", "deepskyblue"),name="Same Study Phase?",labels=c("Samples from same subject,\n different study phase\n","Samples from same subject, \n same study phase"))
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/autocor_jaccard_indiv_all_med_studyphase.png")
+
+```
+
+```{r Supplementary Figure 10d}
+### SUPPLEMENTARY FIGURE 10d
+
+# ridgeline plot of all sample pairs within a participant distribuion by participant of distances between samples
+# only keep samples that are both from the same subject
+combined.same <- combined %>% filter(SameID == TRUE)
+ggplot(combined.same, aes(x = dist, y = ParticipantID.1, fill = SamePhase)) +
+  geom_density_ridges()+labs(x="Jaccard distance between samples",y="Subject ID")+scale_fill_manual(values=c("dodgerblue4", "deepskyblue"),name="Same Study Phase?",labels=c("Samples from same subject,\n different study phase","Samples from same subject, \n same study phase"))
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/autocor_jaccard_ridge.png")
+```
+
+```{r Supplementary Figure 12b}
+### SUPPLEMENTARY FIGURE 12b
+
+ggplot(combined.same)+geom_point(aes(x=abs(DaysBetween),y=dist,color=ParticipantID.1)) + ylim(0,1) + xlab("Gap between samples (days)") + ylab("Jaccard distance between samples")+ labs(color="Subject ID")+scale_color_brewer(palette = "Paired") 
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/autocor_jaccard_3b.png")
+
+```
+
+```{r Supplementary Figure 9b and d}
+### SUPPLEMENTARY FIGURES 9b and d
+
+# All pariticipants
+ggplot(combined.same)+geom_point(aes(x=abs(DaysBetween),y=dist,color=SamePhase)) + ylim(0,1) + xlab("Gap between samples (days)") + ylab("Jaccard distance between samples") + scale_color_manual(values=c("dodgerblue4", "deepskyblue"),name="Same Study Phase?",labels=c("Samples from same subject,\n different study phase\n","Samples from same subject, \n same study phase"))+geom_hline(aes(yintercept=jaccard_autocor_dist_90,linetype="90% Median Distance"),color="orange",size=1)+scale_linetype_manual(name = "Autocorrelation Distance", values = c(2,1), guide = guide_legend(override.aes = list(color = c("orange"))))+geom_hline(aes(yintercept=jaccard_autocor_dist_100,linetype="Median Distance"),color="orange",size=1) # autocorrelation calculated above
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/autocor_jaccard_3.png")
+
+ggplot(combined.same)+geom_point(aes(x=abs(DaysBetween),y=dist,color=SamePhase)) + ylim(0,1) + xlab("Gap between samples (days)") + ylab("Jaccard distance between samples") + scale_color_manual(values=c("dodgerblue4", "deepskyblue"),name="Same Study Phase?",labels=c("Samples from same subject,\n different study phase\n","Samples from same subject, \n same study phase"))+geom_vline(aes(xintercept=jaccard_autocor_days,linetype="Typical Time to 90% Median Distance\n Between Random Samples"),color="orange",size=1)+scale_linetype_manual(name = "Autocorrelation Time", values = c(2), guide = guide_legend(override.aes = list(color = c("orange")))) # autocorrelation calculated above
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/autocor_jaccard_3_vertical.png")
+
+ggplot(combined)+geom_point(aes(x=abs(DaysBetween),y=dist,color=SameID)) + ylim(0,1) + xlab("Gap between samples (days)") + ylab("Jaccard distance between samples") + labs(fill = "same subject")+ scale_color_manual(values=c("#999999", "blue3"),name="Same Subject?",labels=c("Samples from different subjects","Samples from the same subject"))
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/autocor_jaccard_4.png")
+
+```
+
+```{r Supplementary Figure 11}
+### SUPPLEMENTARY FIGURE 11
+
+# BRAY-CURTIS
+#Make the distance matrix:
+dmat <- phyloseq::distance(ps_div, "bray")
+#Convert to straight matrix, every sample by every sample with respective distances in between:
+dmat.m <- as(dmat, "matrix")
+#Replace upper tri and diag w/ NA such that only have each pair combo represented once:
+dmat.m[upper.tri(dmat.m, diag = TRUE)] <- NA
+#Melt to columns and drop NA so that don't have any samples with themselves:
+dcol <- setNames(reshape2::melt(dmat.m, as.is = TRUE), c("Sam1", "Sam2", "dist")) %>% filter(dist != 'NA')
+## make sample data frame
+disdat <- sample_data(ps_div)%>% as("data.frame")
+#Is it true? Have we recovered the correct number of pairwise distances?
+choose(nrow(disdat), 2) == nrow(dcol) 
+#Extend the sample data:
+sam1 <- disdat %>% select(ParticipantID, BarcodeSequence, StudyPhase, DayofStudySample, WeekCollected, DayofStudyElimination, DayofStudyReintroduction) %>% rownames_to_column(var = "Sam1") %>%
+  rename(ParticipantID.1 = ParticipantID, BarcodeSequence.1 = BarcodeSequence, StudyPhase.1 = StudyPhase, DayofStudySample.1 = DayofStudySample, WeekCollected.1 = WeekCollected)
+sam2 <- disdat %>% select(ParticipantID, BarcodeSequence, StudyPhase, DayofStudySample, WeekCollected, DayofStudyElimination, DayofStudyReintroduction) %>% rownames_to_column(var = "Sam2") %>%
+  rename(ParticipantID.2 = ParticipantID, BarcodeSequence.2 = BarcodeSequence, StudyPhase.2 = StudyPhase, DayofStudySample.2 = DayofStudySample, WeekCollected.2 = WeekCollected)
+# Combine the metadata info for each sample id pair and their respective distance
+combined <- left_join(dcol, sam1, by = "Sam1") %>% left_join(sam2, by = "Sam2") %>% mutate(SameID = ParticipantID.1 == ParticipantID.2)
+# create new column with days between samples
+combined <- combined %>% mutate(DaysBetween = abs(DayofStudySample.1-DayofStudySample.2))
+# label if the samples were taken from the same phase or not
+combined <- combined %>% mutate(SamePhase = (StudyPhase.1 == StudyPhase.2))
+# only keep samples that are both from the same subject
+combined.same <- combined %>% filter(SameID == TRUE)
+gap_bin_labels<- c("0.5","1","1.5","2","2.5","3","3.5","4","4.5","5","5.5","6","6.5","7","7.5","8","8.5","9","9.5","10","10.5","11","11.5")
+combined.same$gap_bin <- cut(combined.same$DaysBetween, labels=gap_bin_labels,breaks=c(seq(-1,78,3.5),max(combined.same$DaysBetween)))
+#combined.same.gap <- combined.same %>% group_by(ParticipantID.1,gap_bin) %>% sample_n(1)
+
+bray_autocor_xaxis <- bray_autocor_days/3.5 # convert to half week
+
+ggplot(combined.same)+ # combined.same.gap
+  geom_point(aes(x=gap_bin,y=dist,color=ParticipantID.1)) + 
+  geom_boxplot(alpha=0.3,aes(x=gap_bin,y=dist)) + xlab("Lag (in Weeks)") + 
+  geom_vline(aes(xintercept=bray_autocor_xaxis,linetype="Typical Time to 90% Median Distance\n Between Random Samples"), color= 'black')+
+  #geom_vline(aes(xintercept=bray_autocor_xaxis,linetype="90% Median Distance overall"), color= 'black')+
+    scale_linetype_manual(name = "Autocorrelation Time", values = c(2), guide = guide_legend(override.aes = list(color = c("black"))))+
+   ylab("Bray-Curtis distance between samples within\nall same subject sample pairs") + theme(axis.text.x = element_text(angle = 50, vjust = 1, hjust=1),axis.text =element_text(size=12),axis.title=element_text(size=14),legend.title=element_text(size=14),legend.text=element_text(size=12))+
+  labs(color="Subject ID")+scale_color_brewer(palette = "Paired")
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/betadiversity_lag_gapbins.png",width=10,height=10)
+
+ggplot(combined.same)+ # combined.same.gap
+  geom_point(aes(x=gap_bin,y=dist,color=ParticipantID.1)) + 
+  geom_boxplot(alpha=0.3,aes(x=gap_bin,y=dist)) + xlab("Lag (in Weeks)") + 
+  ylab("Bray-Curtis distance between samples within\nall same subject sample pairs") + theme(axis.text.x = element_text(angle = 50, vjust = 1, hjust=1),axis.text =element_text(size=12),axis.title=element_text(size=14),legend.title=element_text(size=14),legend.text=element_text(size=12))+
+  labs(color="Subject ID")+scale_color_brewer(palette = "Paired")
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/betadiversity_lag_gapbins_noautocor.png",width=10,height=10)
+
+```
+
+```{r Figure 5}
+### SUPPLEMENTARY FIGURE 5
+
+# JACCARD
+#Make the distance matrix:
+dmat <- phyloseq::distance(ps_div, "jaccard", binary = 'TRUE')
+#Convert to straight matrix, every sample by every sample with respective distances in between:
+dmat.m <- as(dmat, "matrix")
+#Replace upper tri and diag w/ NA such that only have each pair combo represented once:
+dmat.m[upper.tri(dmat.m, diag = TRUE)] <- NA
+#Melt to columns and drop NA so that don't have any samples with themselves:
+dcol <- setNames(reshape2::melt(dmat.m, as.is = TRUE), c("Sam1", "Sam2", "dist")) %>% filter(dist != 'NA')
+## make sample data frame
+disdat <- sample_data(ps_div)%>% as("data.frame")
+#Is it true? Have we recovered the correct number of pairwise distances?
+choose(nrow(disdat), 2) == nrow(dcol) 
+#Extend the sample data:
+sam1 <- disdat %>% select(ParticipantID, BarcodeSequence, StudyPhase, DayofStudySample, WeekCollected, DayofStudyElimination, DayofStudyReintroduction) %>% rownames_to_column(var = "Sam1") %>%
+  rename(ParticipantID.1 = ParticipantID, BarcodeSequence.1 = BarcodeSequence, StudyPhase.1 = StudyPhase, DayofStudySample.1 = DayofStudySample, WeekCollected.1 = WeekCollected)
+sam2 <- disdat %>% select(ParticipantID, BarcodeSequence, StudyPhase, DayofStudySample, WeekCollected, DayofStudyElimination, DayofStudyReintroduction) %>% rownames_to_column(var = "Sam2") %>%
+  rename(ParticipantID.2 = ParticipantID, BarcodeSequence.2 = BarcodeSequence, StudyPhase.2 = StudyPhase, DayofStudySample.2 = DayofStudySample, WeekCollected.2 = WeekCollected)
+# Combine the metadata info for each sample id pair and their respective distance
+combined <- left_join(dcol, sam1, by = "Sam1") %>% left_join(sam2, by = "Sam2") %>% mutate(SameID = ParticipantID.1 == ParticipantID.2)
+# create new column with days between samples
+combined <- combined %>% mutate(DaysBetween = abs(DayofStudySample.1-DayofStudySample.2))
+# label if the samples were taken from the same phase or not
+combined <- combined %>% mutate(SamePhase = (StudyPhase.1 == StudyPhase.2))
+# only keep samples that are both from the same subject
+combined.same <- combined %>% filter(SameID == TRUE)
+#gap_bin_labels<- c("1a","1b","2a","2b","3a","3b","4a","4b","5a","5b","6a","6b","7a","7b","8a","8b","9a","9b","10a","10b","11a","11b","12a")
+gap_bin_labels<- c("0.5","1","1.5","2","2.5","3","3.5","4","4.5","5","5.5","6","6.5","7","7.5","8","8.5","9","9.5","10","10.5","11","11.5")
+combined.same$gap_bin <- cut(combined.same$DaysBetween, labels=gap_bin_labels,breaks=c(seq(-1,78,3.5),max(combined.same$DaysBetween)))
+#combined.same.gap <- combined.same %>% group_by(ParticipantID.1,gap_bin) %>% sample_n(1)
+
+# Create line for autocorrelation time
+jaccard_autocor_xaxis <- jaccard_autocor_days/3.5 # convert to half week
+
+ggplot(combined.same)+ # combined.same.gap
+  geom_point(aes(x=gap_bin,y=dist,color=ParticipantID.1)) + 
+  geom_boxplot(alpha=0.3,aes(x=gap_bin,y=dist)) + xlab("Lag (in Weeks)") + 
+  ylab("Jaccard distance between all\nwithin subject sample pairs") +
+  geom_vline(aes(xintercept=jaccard_autocor_xaxis,linetype="Typical Time to 90% Median Distance\n Between Random Samples"), color= 'black')+
+  #geom_vline(aes(xintercept=jaccard_autocor_xaxis,linetype="90% Median Distance overall"), color= 'black')+
+    scale_linetype_manual(name = "Autocorrelation Time", values = c(2), guide = guide_legend(override.aes = list(color = c("black"))))+
+  theme(axis.text.x = element_text(angle = 50, vjust = 1, hjust=1),axis.text =element_text(size=12),axis.title=element_text(size=14),legend.title=element_text(size=14),legend.text=element_text(size=12))+labs(color="Subject ID")+scale_color_brewer(palette = "Paired") 
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/betadiversity_lag_gapbins_jaccard.png",width=10,height=10)
+
+ggplot(combined.same)+ # combined.same.gap
+  geom_point(aes(x=gap_bin,y=dist,color=ParticipantID.1)) + 
+  geom_boxplot(alpha=0.3,aes(x=gap_bin,y=dist)) + xlab("Lag (in Weeks)") + 
+  ylab("Jaccard distance between all\nwithin subject sample pairs") +
+  theme(axis.text.x = element_text(angle = 50, vjust = 1, hjust=1),axis.text =element_text(size=12),axis.title=element_text(size=14),legend.title=element_text(size=14),legend.text=element_text(size=12))+labs(color="Subject ID")+scale_color_brewer(palette = "Paired") 
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/betadiversity_lag_gapbins_jaccard_noautocor.png",width=10,height=10)
+
+
+```
+
+
+```{r Supplementary Figure 14}
+### SUPPLEMENTARY FIGURE 14
+
+hbt_symp_full <- read_excel("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/HBTsymptoms.xlsx")
+hbt_symp <- filter(hbt_symp_full, ParticipantID != 'B1123' & ParticipantID != 'A2222' & ParticipantID != 'A6666' & ParticipantID != 'A9999')
+hbt_symp$HBT1 <- as.numeric(hbt_symp$HBT1)
+hbt_symp$HBT2 <- as.numeric(hbt_symp$HBT2)
+hbt_symp$HBT3 <- as.numeric(hbt_symp$HBT3)
+hbt_symp$HBT4 <- as.numeric(hbt_symp$HBT4)
+
+
+# Symptoms vs HBT AUC
+hbt_symp_long <- gather(hbt_symp,HBT_num,symp,matches("HBT"),factor_key=TRUE)
+hbt_symp_long$HBT_num <- gsub("HBT","",hbt_symp_long$HBT_num)
+hbt_full_symp <- left_join(hbt_full,hbt_symp_long,by=c('ParticipantID','HBT_num'))
+ggplot(hbt_full_symp,aes(x=AUC,y=symp,color=ParticipantID)) + geom_point(size=3) + labs(x="HBT Area Under the Curve",y="HBT symptoms (0=none)",color="Subject ID")+scale_color_brewer(palette = "Paired")
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/AUC_vs_symptoms.png")
+
+
+```
+
+```{r Supplementary Figure 15 and 16}
+### SUPPLEMENTARY FIGURES 15 and 16
+
+#Turn all OTUs into phylum counts
+glom <- tax_glom(ps_reg, taxrank = 'Phylum') # should list # taxa as # phyla
+data_glom<- psmelt(glom) # create dataframe from phyloseq object
+data_glom$Phylum <- as.character(data_glom$Phylum) #convert to character
+
+#simple way to rename phyla with < 1% abundance
+data_glom$Phylum[data_glom$Abundance < 0.01] <- "< 1% abund."
+
+numsample <- distinct(data_glom %>% ungroup() %>% select(ParticipantID,DayofStudySample)) %>%arrange(DayofStudySample)%>% group_by(ParticipantID) %>% mutate(NumSample = row_number())
+data_glom_num <- left_join(data_glom,numsample,by=c("DayofStudySample","ParticipantID"))
+
+#Count phyla to set color palette
+Count = length(unique(data_glom$Phylum))
+
+#plot with condensed phyla into "unknown" category
+spatial_plot <- ggplot(data=data_glom, aes(x=WeekCollected, y=Abundance, fill=Phylum)) + facet_wrap(~ParticipantID, scales = "free")
+spatial_plot + geom_bar(aes(), stat="identity", position="fill") +
+  scale_fill_manual(values = c("darkorchid","gold1", "forestgreen", "firebrick","deeppink", "mediumspringgreen", "darkorange1","black","purple")) +
+  theme(legend.position="bottom") + guides(fill=guide_legend(nrow=2)) + geom_vline(data=sample_data(ps_reg),aes(xintercept=as.numeric(DayofStudyElimination)/7)) + geom_vline(data=sample_data(ps_reg),aes(xintercept=as.numeric(DayofStudyReintroduction)/7))+xlab("Week Collected")+ylab("Fraction of Abundance in Samples")
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/taxa_barplots_week_Phylum.png")
+
+ggplot(data=data_glom_num, aes(x=NumSample, y=Abundance, fill=Phylum)) + facet_wrap(~ParticipantID, scales = "free") + 
+  geom_bar(aes(), stat="identity", position="fill") +
+  scale_fill_manual(values = c("darkorchid","gold1", "forestgreen", "firebrick","deeppink", "mediumspringgreen", "darkorange1","black","purple")) +
+    xlab("Number Sample")+ylab("Fraction of Abundance in Samples")+
+  theme(legend.position="bottom") + guides(fill=guide_legend(nrow=2))# + geom_vline(data=sample_data(data_glom),aes(xintercept=as.numeric(DayofStudyElimination)),size=1.5) + #geom_vline(data=sample_data(data_glom),aes(xintercept=as.numeric(DayofStudyReintroduction)),size=1.5)+
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/taxa_barplots_number_Phylum.png",width=15,height=7)
+
+#Turn all OTUs into family counts
+glom <- tax_glom(ps_reg, taxrank = 'Family') # should list taxa as Family
+data_glom<- psmelt(glom) # create dataframe from phyloseq object
+data_glom$Family <- as.character(data_glom$Family) #convert to character
+
+#simple way to rename family with < 15% abundance
+data_glom$Family[data_glom$Abundance < 0.15] <- "< 15% abund."
+
+#Count phyla to set color palette
+Count = length(unique(data_glom$Family))
+
+#plot with condensed phyla into "unknown" category
+spatial_plot <- ggplot(data=data_glom, aes(x=WeekCollected, y=Abundance, fill=Family)) + facet_wrap(~ParticipantID, scales = "free")
+spatial_plot + geom_bar(aes(), stat="identity", position="fill") +
+  scale_fill_manual(values = c("darkorchid","gold1", "black", "firebrick","deeppink", "mediumspringgreen", "darkorange1","forestgreen","dodgerblue3")) +  theme(legend.position="bottom") + guides(fill=guide_legend(nrow=2)) + geom_vline(data=sample_data(ps_reg),aes(xintercept=as.numeric(DayofStudyElimination)/7)) + geom_vline(data=sample_data(ps_reg),aes(xintercept=as.numeric(DayofStudyReintroduction)/7))+xlab("Week Collected")+ylab("Fraction of Abundance in Samples")
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/taxa_barplots_week_Family.png",width=8)
+
+numsample <- distinct(data_glom %>% ungroup() %>% select(ParticipantID,DayofStudySample)) %>%arrange(DayofStudySample)%>% group_by(ParticipantID) %>% mutate(NumSample = row_number())
+data_glom_num <- left_join(data_glom,numsample,by=c("DayofStudySample","ParticipantID"))
+
+ggplot(data=data_glom_num, aes(x=NumSample, y=Abundance, fill=Family)) + facet_wrap(~ParticipantID, scales = "free") + 
+  geom_bar(aes(), stat="identity", position="fill") +
+  scale_fill_manual(values = c("darkorchid","gold1", "forestgreen", "firebrick","deeppink", "mediumspringgreen", "darkorange1","black","purple")) +
+    xlab("Number Sample")+ylab("Fraction of Abundance in Samples")+
+  theme(legend.position="bottom") + guides(fill=guide_legend(nrow=2))# + geom_vline(data=sample_data(data_glom),aes(xintercept=as.numeric(DayofStudyElimination)),size=1.5) + #geom_vline(data=sample_data(data_glom),aes(xintercept=as.numeric(DayofStudyReintroduction)),size=1.5)+
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/taxa_barplots_number_Family.png",width=15,height=7)
+
+
+```
+
+```{r Supplementary Figure 17}
+### SUPPLEMENTARY FIGURE 17
+
+#Bray-Curtis, participants who collected samples regularly and did all 3 study phases, pcoa wrapped and scaled by participantID
+names = as.vector(unique(sample_data(ps_reg)[["ParticipantID"]]))
+plotg = list()
+for (i in names) {
+  temp = subset_samples(ps_reg, ParticipantID == i)
+  transform_compositional = function(temp) {
+    otu_table(temp) = otu_table(
+      get_taxa(temp) / rowSums(get_taxa(temp)),
+      taxa_are_rows = FALSE
+    )
+    temp
+  }
+  ps_comp = transform_compositional(temp)
+  out.ord = ordinate(ps_comp, method = "PCoA", distance = "bray")
+  bc.evals = out.ord$values$Eigenvalues
+  plotg[[i]] <- ggplot(data.frame(out.ord$vectors, sample_data(ps_comp)),aes(y = Axis.2, x = Axis.1, color = StudyPhase)) +
+    geom_point(size = 1)+
+    theme(panel.border = element_rect("transparent")) + theme(legend.position="none")  + ggtitle(i) +
+    labs(
+      "x" = "Axis 1",
+      "y" = "Axis 2",color="Subject ID")+scale_color_brewer(palette = "Dark2")
+}
+layout <- matrix(c(1:length(names)), nrow = 3, byrow = TRUE)
+multiplot(plotlist = plotg, layout = layout)
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/pcoa_bray_wrapbyparticipant.png",multiplot(plotlist = plotg, layout = layout),height=5,width=7)
+
+# Jaccard, participants who collected samples regularly and did all 3 study phases, pcoa wrapped and scaled by participantID
+names = as.vector(unique(sample_data(ps_reg)[["ParticipantID"]]))
+plotg = list()
+for (i in names) {
+  temp = subset_samples(ps_reg, ParticipantID == i)
+  transform_compositional = function(temp) {
+    otu_table(temp) = otu_table(
+      get_taxa(temp) / rowSums(get_taxa(temp)),
+      taxa_are_rows = FALSE
+    )
+    temp
+  }
+  ps_comp = transform_compositional(temp)
+  out.ord = ordinate(ps_comp, method = "PCoA", distance = "jaccard",binary="TRUE")
+  bc.evals = out.ord$values$Eigenvalues
+  plotg[[i]] <- ggplot(data.frame(out.ord$vectors, sample_data(ps_comp))) +
+    geom_point(aes(y = Axis.2, x = Axis.1, color = StudyPhase), size = 1)+
+    theme(panel.border = element_rect("transparent")) + theme(legend.position="none")   + ggtitle(i) +
+    labs(
+      "x" = "Axis 1",
+      "y" = "Axis 2")+scale_color_brewer(palette = "Dark2")
+}
+layout <- matrix(c(1:length(names)), nrow = 3, byrow = TRUE)
+multiplot(plotlist = plotg, layout = layout)
+#ggsave("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/Paper_Figures/Supplementary/pcoa_jaccard_wrapbyparticipant.png",multiplot(plotlist = plotg, layout = layout),height=5,width=7)
+
+```
+
+Additional calculations and analysis
+
+```{r dispersion to distance}
+
+#### Find the relationship between how labile a person's microbiome is in general vs HBT response
+
+### Find dispersion for each individual
+#Make the distance matrix:
+bray_distance <- phyloseq::distance(ps_reg, "bray")
+# Calculate dispersion
+beta <- betadisper(bray_distance, as.data.frame(sample_data(ps_reg))$ParticipantID)
+disper<- with(beta, tapply(distances, beta$group, "mean"))
+disper_df <- data.frame(disper)
+disper_df$ParticipantID <- rownames(disper)
+
+### Find HBT variation (variance in HBT AUC) for each individual
+varAUC <- hbt_long %>% group_by(ParticipantID) %>% summarize(var_AUC=var(AUC))
+
+## correlation between HBT var and dispersion
+disper_varAUC <- left_join(disper_df,varAUC,by=c("ParticipantID"))
+cor.test(disper_varAUC$disper,disper_varAUC$var_AUC, method = c("pearson")) # "pearson", "spearman"
+# pearson: cor = 0.343, 95% confidence interval contains 0, pvalue 0.2745
+# spearman: rho = 0.203, pvalue 0.528
+```
+
+```{r Statistical analysis}
+
+# Stats test for changes in area under the curve for dif HBTs
+sdata <- sample_data(ps_reg) %>% group_by(ParticipantID) %>% summarize_at(c("X1stHBTsum","X2ndHBTsum","X3rdHBTsum","X4thHBTsum"),mean)
+sdata$HBTdif_23 <- abs(sdata$X3rdHBTsum - sdata$X2ndHBTsum) # shift from after baseline HBT to after elimination HBT
+sdata$HBTdif_24 <- abs(sdata$X4thHBTsum - sdata$X2ndHBTsum) # shift from after baseline HBT to after reintroduction HBT
+sdata$HBTdif_12 <- abs(sdata$X1stHBTsum - sdata$X2ndHBTsum) # shift from first baseline HBT to second baseline HBT
+#wilcox.test(sdata$HBTdif_12, sdata$HBTdif_24, paired=TRUE) # compare dif between shift between baselines and shift from after baseline to after reintroduction HBT
+
+wilcox.test(sdata$X2ndHBTsum, sdata$X3rdHBTsum, paired=TRUE)
+wilcox.test(sdata$X2ndHBTsum, sdata$X4thHBTsum, paired=TRUE) 
+wilcox.test(sdata$X3rdHBTsum, sdata$X4thHBTsum, paired=TRUE) 
+wilcox.test(sdata$X2ndHBTsum, sdata$X1stHBTsum, paired=TRUE)
+wilcox.test(sdata$X3rdHBTsum, sdata$X1stHBTsum, paired=TRUE)
+wilcox.test(sdata$X4thHBTsum, sdata$X1stHBTsum, paired=TRUE)
+
+# Stats test for changes in symptoms
+hbt_symp_full <- read_excel("C:/Users/Courtney Smith/Desktop/Lactose_Final_Figures/HBTsymptoms.xlsx")
+hbt_symp <- filter(hbt_symp_full, ParticipantID != 'B1123' & ParticipantID != 'A2222' & ParticipantID != 'A6666' & ParticipantID != 'A9999')
+hbt_symp$HBT1 <- as.numeric(hbt_symp$HBT1)
+hbt_symp$HBT2 <- as.numeric(hbt_symp$HBT2)
+hbt_symp$HBT3 <- as.numeric(hbt_symp$HBT3)
+hbt_symp$HBT4 <- as.numeric(hbt_symp$HBT4)
+
+wilcox.test(hbt_symp$HBT2, hbt_symp$HBT3, paired=TRUE)
+wilcox.test(hbt_symp$HBT2, hbt_symp$HBT4, paired=TRUE)
+wilcox.test(hbt_symp$HBT1, hbt_symp$HBT2, paired=TRUE)
+wilcox.test(hbt_symp$HBT3, hbt_symp$HBT4, paired=TRUE)
+
+##################
+
+# Stats test for clustering by Subject ID - permanova Bray curtis
+BC.dist=vegdist(otu_table(ps_reg), distance="bray") #Calculate distance and save as a matrix
+adonis(BC.dist ~ ParticipantID, data = data.frame(sample_data(ps_reg)), permutations = 1000) # ParticipantID
+adonis(BC.dist ~ StudyPhase, data = data.frame(sample_data(ps_reg)), permutations = 1000) # Study Phase
+adonis(BC.dist ~ X3rdHBTtolerance, data = data.frame(sample_data(ps_reg)), permutations = 1000) # Tolerance
+adonis(BC.dist ~ ParticipantID / StudyPhase, data = data.frame(sample_data(ps_reg)), permutations = 1000) # study phase nested within participant
+
+ps_no_baseline <- subset_samples(ps_reg,StudyPhase!="Baseline")
+BC.dist.nb=vegdist(otu_table(ps_no_baseline), distance="bray") #Calculate distance and save as a matrix
+adonis(BC.dist.nb ~ ParticipantID / StudyPhase,  data.frame(sample_data(ps_no_baseline)), permutations = 1000) # study phase nested within participant for elimination vs reintroduction samples only
+
+ps_last3weeks <- subset_samples(ps_no_baseline,last3 == "Y")
+BC.dist.nb.l3=vegdist(otu_table(ps_last3weeks), distance="bray") #Calculate distance and save as a matrix
+adonis(BC.dist.nb.l3 ~ ParticipantID / StudyPhase,  data.frame(sample_data(ps_last3weeks)), permutations = 1000) # study phase nested within participant for last 3 weeks of elimination vs last 3 weeks of reintroduction samples only
+
+###
+
+b8890 <- subset_samples(ps_reg,ParticipantID=="B8890")
+BC.dist=vegdist(otu_table(b8890), distance="bray") #Calculate distance and save as a matrix
+adonis(BC.dist ~ StudyPhase, data = data.frame(sample_data(b8890)), permutations = 1000) #Run PERMANOVA on distances.
+
+b9901 <- subset_samples(ps_reg,ParticipantID=="B9901")
+BC.dist=vegdist(otu_table(b9901), distance="bray") #Calculate distance and save as a matrix
+adonis(BC.dist ~ StudyPhase, data = data.frame(sample_data(b9901)), permutations = 1000) #Run PERMANOVA on distances.
+
+########
+
+# Stats test for clustering by Subject ID - permanova Bray curtis
+BC.dist=vegdist(otu_table(ps_reg), distance="jaccard",binary=TRUE) #Calculate distance and save as a matrix
+adonis(BC.dist ~ ParticipantID, data = data.frame(sample_data(ps_reg)), permutations = 1000) # ParticipantID
+adonis(BC.dist ~ StudyPhase, data = data.frame(sample_data(ps_reg)), permutations = 1000) # Study Phase
+adonis(BC.dist ~ X3rdHBTtolerance, data = data.frame(sample_data(ps_reg)), permutations = 1000) # Tolerance
+adonis(BC.dist ~ ParticipantID / StudyPhase, data = data.frame(sample_data(ps_reg)), permutations = 1000) # study phase nested within participant
+
+ps_no_baseline <- subset_samples(ps_reg,StudyPhase!="Baseline")
+BC.dist.nb=vegdist(otu_table(ps_no_baseline), distance="jaccard",binary=TRUE) #Calculate distance and save as a matrix
+adonis(BC.dist.nb ~ ParticipantID / StudyPhase,  data.frame(sample_data(ps_no_baseline)), permutations = 1000) # study phase nested within participant for elimination vs reintroduction samples only
+
+ps_last3weeks <- subset_samples(ps_no_baseline,last3 == "Y")
+BC.dist.nb.l3=vegdist(otu_table(ps_last3weeks), distance="jaccard",binary=TRUE) #Calculate distance and save as a matrix
+adonis(BC.dist.nb.l3 ~ ParticipantID / StudyPhase,  data.frame(sample_data(ps_last3weeks)), permutations = 1000) # study phase nested within participant for last 3 weeks of elimination vs last 3 weeks of reintroduction samples only
+
+####################
+
+# Comparing mean of last 3 weeks of Eliminations samples vs last 3 weeks of Reintroduction samples for Bifidobacterium, Ruminococcus_2 and Agathobacter
+bif_last3 <- sample_dfgenus %>% filter(last3=="Y") %>% group_by(ParticipantID,StudyPhase) %>% summarize(mean_Bifido=mean(Bifidobacterium))
+bif_last3$StudyPhase <- as.factor(bif_last3$StudyPhase)
+bif <- spread(bif_last3,StudyPhase,mean_Bifido)
+wilcox.test(bif$Elimination, bif$Reintroduction, paired=TRUE)
+bif_last3 %>% group_by(StudyPhase) %>% summarize(mean(mean_Bifido))
+
+rum_last3 <- sample_dfgenus %>% filter(last3=="Y") %>% group_by(ParticipantID,StudyPhase) %>% summarize(mean_Rumino=mean(Ruminococcus_2))
+rum_last3$StudyPhase <- as.factor(rum_last3$StudyPhase)
+rum <- spread(rum_last3,StudyPhase,mean_Rumino)
+wilcox.test(rum$Elimination, rum$Reintroduction, paired=TRUE)
+
+aga_last3 <- sample_dfgenus %>% filter(last3=="Y") %>% group_by(ParticipantID,StudyPhase) %>% summarize(mean_Agatho=mean(Agathobacter))
+aga_last3$StudyPhase <- as.factor(aga_last3$StudyPhase)
+aga <- spread(aga_last3,StudyPhase,mean_Agatho)
+wilcox.test(aga$Elimination, aga$Reintroduction, paired=TRUE)
+```
+
+```{r LDA}
+### TREEDA / LDA ANALYSIS
+
+ps_sub = subset_samples(ps_reg, last3 == 'Y')
+subjects = unique(sample_data(ps_sub)$ParticipantID)
+otu_table = otu_table(ps_sub)
+X = log(1 + otu_table)
+for(s in subjects) { 
+  idx = which(sample_data(ps_sub)$ParticipantID == s)
+  X[idx, ] = scale(X[idx, ], scale = FALSE)
+}
+
+ps_sub <- phyloseq(otu_table(X),sample_data(ps_sub),tax_table(ps_sub),phy_tree(ps_sub))
+
+set.seed(0)
+out.treedacv <- treedacv(response = sample_data(ps_sub)$StudyPhase,
+                         predictors = otu_table(ps_sub),
+                         tree = phy_tree(ps_sub),
+                         folds = 4, pvec = 1:25)
+out.treedacv
+plot(out.treedacv)
+# pause to adjust p based on plot
+
+out.treeda = treeda(response = sample_data(ps_sub)$StudyPhase,
+                    predictors = otu_table(ps_sub),
+                    tree = phy_tree(ps_sub), p = 15)
+out.treeda
+
+#ggplot(data.frame(sample_data(ps_sub), projections = out.treeda$projections)) +
+#  geom_point(aes(x = ParticipantID, y = projections, color = StudyPhase))+ ylab("Score")
+
+treeDA::plot_coefficients(out.treeda, remove.bl = TRUE)
+plot(as.vector(out.treeda$leafCoefficients$beta))
+coef <- as.vector(out.treeda$leafCoefficients$beta)
+
+taxa.up <- which(coef > 0.01)
+length(taxa.up)
+unname(tax_table(ps_sub)[taxa.up,]) # Indic up 
+unname(unique(tax_table(ps_sub)[taxa.up,])) # unique ones only
+
+coef <- as.vector(out.treeda$leafCoefficients$beta)
+taxa.down <- which(coef < -0.01)
+length(taxa.down)
+unname(tax_table(ps_sub)[taxa.down,]) # Indic down
+unname(unique(tax_table(ps_sub)[taxa.down,])) # unique ones only
+
+coef = as.vector(out.treeda$leafCoefficients$beta)
+taxa.max = which(coef == max(coef))
+length(taxa.max)
+unname(tax_table(ps_sub)[taxa.max,])
+unname(unique(tax_table(ps_sub)[taxa.max,]))
+
+# Parameters for Bifidobacterium: ps_asv as input, all elimination and all reintroduction samples, FullStudyNormal Pariticpants, p=7
+```
+
+```{r LDA for dairy abstainers}
+### TREEDA / LDA ANALYSIS - For Dairy Abstainers
+
+dairy_noabstain_list <- unique(sample_data(subset_samples(ps_reg,PreviousDairy=="Some"|PreviousDairy=="Y"))$ParticipantID) # list of participants that did reported having some or regular dairy (as compared to those that had no or only lactose free dairy before starting the study)
+
+## Repeat above but with dairy abstainers
+ps_noabstain <- subset_samples(ps_reg,!(ParticipantID %in% dairy_noabstain_list))
+ps_sub = subset_samples(ps_noabstain, last3 == 'Y')
+subjects = unique(sample_data(ps_noabstain)$ParticipantID)
+otu_table = otu_table(ps_sub)
+X = log(1 + otu_table)
+for(s in subjects) { 
+  idx = which(sample_data(ps_sub)$ParticipantID == s)
+  X[idx, ] = scale(X[idx, ], scale = FALSE)
+}
+
+ps_sub <- phyloseq(otu_table(X),sample_data(ps_sub),tax_table(ps_sub),phy_tree(ps_sub))
+
+set.seed(0)
+out.treedacv <- treedacv(response = sample_data(ps_sub)$StudyPhase,
+                         predictors = otu_table(ps_sub),
+                         tree = phy_tree(ps_sub),
+                         folds = 4, pvec = 1:25)
+out.treedacv
+plot(out.treedacv)
+# pause to adjust p based on plot
+
+out.treeda = treeda(response = sample_data(ps_sub)$StudyPhase,
+                    predictors = otu_table(ps_sub),
+                    tree = phy_tree(ps_sub), p = 12)
+out.treeda
+
+#ggplot(data.frame(sample_data(ps_sub), projections = out.treeda$projections)) +
+#  geom_point(aes(x = ParticipantID, y = projections, color = StudyPhase))+ ylab("Score")
+
+treeDA::plot_coefficients(out.treeda, remove.bl = TRUE)
+plot(as.vector(out.treeda$leafCoefficients$beta))
+coef <- as.vector(out.treeda$leafCoefficients$beta)
+
+taxa.up <- which(coef > 0.01)
+length(taxa.up)
+unname(tax_table(ps_sub)[taxa.up,]) # Indic up 
+unname(unique(tax_table(ps_sub)[taxa.up,])) # unique ones only
+
+coef <- as.vector(out.treeda$leafCoefficients$beta)
+taxa.down <- which(coef < -0.01)
+length(taxa.down)
+unname(tax_table(ps_sub)[taxa.down,]) # Indic down
+unname(unique(tax_table(ps_sub)[taxa.down,])) # unique ones only
+
+coef = as.vector(out.treeda$leafCoefficients$beta)
+taxa.max = which(coef == max(coef))
+length(taxa.max)
+unname(tax_table(ps_sub)[taxa.max,])
+unname(unique(tax_table(ps_sub)[taxa.max,]))
+
+```
+
+```{r LDA negative control}
+### TREEDA / LDA ANALYSIS - Negative control
+
+# negative control of discriminating between samples across the study and participants based on if the sample was processed on an even or odd plate
+ps_sub = ps_reg
+subjects = unique(sample_data(ps_sub)$ParticipantID)
+otu_table = otu_table(ps_sub)
+X = log(1 + otu_table)
+for(s in subjects) { 
+  idx = which(sample_data(ps_sub)$ParticipantID == s)
+  X[idx, ] = scale(X[idx, ], scale = FALSE)
+}
+
+sample_data(ps_sub) <- data.frame(sample_data(ps_sub)) %>% mutate(is_oddplateID=ifelse(PlateID %% 2 != 0, "yes","no"))
+sample_data(ps_sub)$is_oddplateID <- as.factor(data.frame(sample_data(ps_sub))$is_oddplateID)
+ps_sub <- phyloseq(otu_table(X),sample_data(ps_sub),tax_table(ps_sub),phy_tree(ps_sub))
+
+set.seed(0)
+out.treedacv <- treedacv(response = sample_data(ps_sub)$is_oddplateID,
+                         predictors = otu_table(ps_sub),
+                         tree = phy_tree(ps_sub),
+                         folds = 4, pvec = 1:25)
+out.treedacv
+plot(out.treedacv)
+# pause to adjust p based on plot
+
+out.treeda = treeda(response = sample_data(ps_sub)$is_oddplateID,
+                    predictors = otu_table(ps_sub),
+                    tree = phy_tree(ps_sub), p = 8)
+out.treeda
+```
